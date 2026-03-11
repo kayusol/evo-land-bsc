@@ -30,7 +30,7 @@ jobs:
           echo "=== Hardhat version ==="
           npx hardhat --version
           echo "=== OZ version ==="
-          cat node_modules/@openzeppelin/contracts/package.json | grep '"version"'
+          cat node_modules/@openzeppelin/contracts/package.json | grep '"version"' || true
 
       - name: Compile contracts (verbose)
         run: |
