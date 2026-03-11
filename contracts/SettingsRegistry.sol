@@ -6,16 +6,15 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 /**
  * @title SettingsRegistry
  * @dev Central registry for all contract addresses and configuration values.
- *      All other contracts look up addresses here instead of hardcoding them.
  */
 contract SettingsRegistry is Ownable {
 
     mapping(bytes32 => uint256) public uintOf;
     mapping(bytes32 => address) public addressOf;
     mapping(bytes32 => bytes32) public bytesOf;
-    mapping(bytes32 => bool) public boolOf;
-    mapping(bytes32 => int256) public intOf;
-    mapping(bytes32 => string) public stringOf;
+    mapping(bytes32 => bool)    public boolOf;
+    mapping(bytes32 => int256)  public intOf;
+    mapping(bytes32 => string)  public stringOf;
 
     event UpdateUint(bytes32 indexed _key, uint256 _value);
     event UpdateAddress(bytes32 indexed _key, address _value);
