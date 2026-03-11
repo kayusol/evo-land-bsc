@@ -21,10 +21,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Compile contracts
         run: npx hardhat compile
@@ -52,4 +51,4 @@ jobs:
           cat deployed.json 2>/dev/null || echo "deployed.json not found"
           echo ""
           echo "=== DEPLOY LOG ==="
-          tail -50 deploy-output.log 2>/dev/null || true
+          tail -80 deploy-output.log 2>/dev/null || true
