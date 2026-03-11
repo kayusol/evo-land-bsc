@@ -23,19 +23,30 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: npm install
+        run: npm install 2>&1
 
-      - name: Compile contracts
-        run: npx hardhat compile
+      - name: Show installed packages
+        run: |
+          echo "=== Hardhat version ==="
+          npx hardhat --version
+          echo "=== OZ version ==="
+          cat node_modules/@openzeppelin/contracts/package.json | grep '"version"'
+
+      - name: Compile contracts (verbose)
+        run: |
+          npx hardhat compile --force 2>&1
+          echo "Compile exit code: $?"
 
       - name: Deploy to BSC Testnet
         env:
           PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
         run: |
           npx hardhat run scripts/deploy.js --network bscTestnet 2>&1 | tee deploy-output.log
-          echo "Exit code: $?"
+          DEPLOY_EXIT=${PIPESTATUS[0]}
+          echo "Deploy exit code: $DEPLOY_EXIT"
+          exit $DEPLOY_EXIT
 
-      - name: Upload deployed.json
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -44,11 +55,11 @@ jobs:
             deployed.json
             deploy-output.log
 
-      - name: Show deployed addresses
+      - name: Print results
         if: always()
         run: |
-          echo "=== DEPLOYED ADDRESSES ==="
-          cat deployed.json 2>/dev/null || echo "deployed.json not found"
+          echo "=== deployed.json ==="
+          cat deployed.json 2>/dev/null || echo "(not found)"
           echo ""
-          echo "=== DEPLOY LOG ==="
-          tail -80 deploy-output.log 2>/dev/null || true
+          echo "=== deploy log (last 100 lines) ==="
+          tail -100 deploy-output.log 2>/dev/null || true
