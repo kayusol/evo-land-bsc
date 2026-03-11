@@ -9,17 +9,18 @@ import "./SettingsRegistry.sol";
 
 /**
  * @title ClockAuction
- * @dev Dutch auction for land and apostle NFTs.
- *      Price decays linearly from startPrice to endPrice over duration.
- *      Buyer pays in RING tokens. 4% cut to revenue pool.
+ * @dev Dutch auction. Price decays linearly. Buyers pay RING. 4% cut to revenue pool.
  */
 contract ClockAuction is Ownable, ReentrancyGuard {
 
-    bytes32 public constant CONTRACT_RING_ERC20_TOKEN = "CONTRACT_RING_ERC20_TOKEN";
-    bytes32 public constant CONTRACT_REVENUE_POOL     = "CONTRACT_REVENUE_POOL";
-    bytes32 public constant CONTRACT_OBJECT_OWNERSHIP = "CONTRACT_OBJECT_OWNERSHIP";
+    bytes32 public constant CONTRACT_RING_ERC20_TOKEN =
+        keccak256(abi.encodePacked("CONTRACT_RING_ERC20_TOKEN"));
+    bytes32 public constant CONTRACT_REVENUE_POOL =
+        keccak256(abi.encodePacked("CONTRACT_REVENUE_POOL"));
+    bytes32 public constant CONTRACT_OBJECT_OWNERSHIP =
+        keccak256(abi.encodePacked("CONTRACT_OBJECT_OWNERSHIP"));
 
-    uint256 public constant AUCTION_CUT = 400;   // 4% in basis points
+    uint256 public constant AUCTION_CUT = 400;
     uint256 public constant CUT_BASE    = 10000;
 
     struct Auction {
@@ -53,7 +54,6 @@ contract ClockAuction is Ownable, ReentrancyGuard {
 
         IERC721 nft = IERC721(registry.addressOf(CONTRACT_OBJECT_OWNERSHIP));
         require(nft.ownerOf(tokenId) == msg.sender, "Not owner");
-
         nft.transferFrom(msg.sender, address(this), tokenId);
 
         auctions[tokenId] = Auction({
@@ -80,7 +80,6 @@ contract ClockAuction is Ownable, ReentrancyGuard {
 
         uint256 cut = (price * AUCTION_CUT) / CUT_BASE;
         uint256 sellerProceeds = price - cut;
-
         require(ring.transfer(auction.seller, sellerProceeds), "Seller payment failed");
 
         address revenuePool = registry.addressOf(CONTRACT_REVENUE_POOL);
@@ -91,8 +90,8 @@ contract ClockAuction is Ownable, ReentrancyGuard {
         address seller = auction.seller;
         delete auctions[tokenId];
 
-        IERC721 nft = IERC721(registry.addressOf(CONTRACT_OBJECT_OWNERSHIP));
-        nft.safeTransferFrom(address(this), msg.sender, tokenId);
+        IERC721(registry.addressOf(CONTRACT_OBJECT_OWNERSHIP))
+            .safeTransferFrom(address(this), msg.sender, tokenId);
 
         emit AuctionSuccessful(tokenId, msg.sender, seller, price);
     }
@@ -105,8 +104,8 @@ contract ClockAuction is Ownable, ReentrancyGuard {
         address seller = auction.seller;
         delete auctions[tokenId];
 
-        IERC721 nft = IERC721(registry.addressOf(CONTRACT_OBJECT_OWNERSHIP));
-        nft.safeTransferFrom(address(this), seller, tokenId);
+        IERC721(registry.addressOf(CONTRACT_OBJECT_OWNERSHIP))
+            .safeTransferFrom(address(this), seller, tokenId);
 
         emit AuctionCancelled(tokenId);
     }
@@ -116,25 +115,17 @@ contract ClockAuction is Ownable, ReentrancyGuard {
         require(auction.active, "No active auction");
 
         uint256 elapsed = block.timestamp - auction.startedAt;
-        if (elapsed >= auction.duration) {
-            return auction.endPrice;
-        }
+        if (elapsed >= auction.duration) return auction.endPrice;
 
         uint256 priceDiff = auction.startPrice > auction.endPrice
-            ? auction.startPrice - auction.endPrice
-            : 0;
+            ? auction.startPrice - auction.endPrice : 0;
 
         return auction.startPrice - (priceDiff * elapsed / auction.duration);
     }
 
     function getAuction(uint256 tokenId) external view returns (
-        address seller,
-        uint256 startPrice,
-        uint256 endPrice,
-        uint256 duration,
-        uint256 startedAt,
-        bool active,
-        uint256 currentPrice
+        address seller, uint256 startPrice, uint256 endPrice,
+        uint256 duration, uint256 startedAt, bool active, uint256 currentPrice
     ) {
         Auction storage a = auctions[tokenId];
         return (a.seller, a.startPrice, a.endPrice, a.duration, a.startedAt,
