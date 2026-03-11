@@ -1,0 +1,55 @@
+name: Deploy to BSC Testnet
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DEPLOY to confirm'
+        required: true
+        default: ''
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.confirm == 'DEPLOY'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile contracts
+        run: npx hardhat compile
+
+      - name: Deploy to BSC Testnet
+        env:
+          PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
+        run: |
+          npx hardhat run scripts/deploy.js --network bscTestnet 2>&1 | tee deploy-output.log
+          echo "Exit code: $?"
+
+      - name: Upload deployed.json
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deployed-addresses
+          path: |
+            deployed.json
+            deploy-output.log
+
+      - name: Show deployed addresses
+        if: always()
+        run: |
+          echo "=== DEPLOYED ADDRESSES ==="
+          cat deployed.json 2>/dev/null || echo "deployed.json not found"
+          echo ""
+          echo "=== DEPLOY LOG ==="
+          tail -50 deploy-output.log 2>/dev/null || true
