@@ -15,7 +15,8 @@ module.exports = {
       chainId: 97,
       accounts: PRIVATE_KEY ? [PRIVATE_KEY] : [],
       gasPrice: 10000000000,
-      timeout: 120000
+      timeout: 120000,
+      nonce: "pending"
     }
   },
   etherscan: {
