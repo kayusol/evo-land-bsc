@@ -1,396 +1,453 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-// ============================================================
-//  Minimal ERC20 base (no OZ dependency)
-// ============================================================
+// =============================================================
+//  Evolution Land BSC  —  Simplified Single-Chain Edition
+//
+//  Tokens:   RING (main) + GOLD / WOOD / HHO / FIRE / SIOO
+//  NFTs:     Land (100x100) + Drill + Apostle
+//  Systems:  Mining (Apostle works on Land, Drill boosts rate)
+//            Dutch Auction (Land primary sale)
+// =============================================================
+
+// ── Helpers ──────────────────────────────────────────────────
+
+abstract contract Ownable {
+    address public owner;
+    event OwnershipTransferred(address indexed prev, address indexed next);
+    constructor() { owner = msg.sender; }
+    modifier onlyOwner() { require(msg.sender == owner, "!owner"); _; }
+    function transferOwnership(address a) external onlyOwner {
+        require(a != address(0)); emit OwnershipTransferred(owner, a); owner = a;
+    }
+}
+
 abstract contract ERC20Base {
     string  public name;
     string  public symbol;
     uint8   public constant decimals = 18;
     uint256 public totalSupply;
-
     mapping(address => uint256) public balanceOf;
     mapping(address => mapping(address => uint256)) public allowance;
-
-    event Transfer(address indexed from, address indexed to, uint256 value);
-    event Approval(address indexed owner, address indexed spender, uint256 value);
-
-    constructor(string memory _name, string memory _symbol) {
-        name   = _name;
-        symbol = _symbol;
+    event Transfer(address indexed f, address indexed t, uint256 v);
+    event Approval(address indexed o, address indexed s, uint256 v);
+    constructor(string memory n, string memory s) { name = n; symbol = s; }
+    function transfer(address t, uint256 v) external returns (bool) { _transfer(msg.sender,t,v); return true; }
+    function approve(address s, uint256 v) external returns (bool) { allowance[msg.sender][s]=v; emit Approval(msg.sender,s,v); return true; }
+    function transferFrom(address f, address t, uint256 v) external returns (bool) {
+        if (allowance[f][msg.sender] != type(uint256).max) allowance[f][msg.sender] -= v;
+        _transfer(f,t,v); return true;
     }
-
-    function transfer(address to, uint256 amount) external returns (bool) {
-        _transfer(msg.sender, to, amount);
-        return true;
-    }
-
-    function approve(address spender, uint256 amount) external returns (bool) {
-        allowance[msg.sender][spender] = amount;
-        emit Approval(msg.sender, spender, amount);
-        return true;
-    }
-
-    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
-        if (allowance[from][msg.sender] != type(uint256).max) {
-            allowance[from][msg.sender] -= amount;
-        }
-        _transfer(from, to, amount);
-        return true;
-    }
-
-    function _transfer(address from, address to, uint256 amount) internal {
-        require(from != address(0) && to != address(0), "zero address");
-        balanceOf[from] -= amount;
-        balanceOf[to]   += amount;
-        emit Transfer(from, to, amount);
-    }
-
-    function _mint(address to, uint256 amount) internal {
-        require(to != address(0), "zero address");
-        totalSupply     += amount;
-        balanceOf[to]   += amount;
-        emit Transfer(address(0), to, amount);
-    }
-
-    function _burn(address from, uint256 amount) internal {
-        require(from != address(0), "zero address");
-        balanceOf[from] -= amount;
-        totalSupply     -= amount;
-        emit Transfer(from, address(0), amount);
-    }
+    function _transfer(address f, address t, uint256 v) internal { require(t!=address(0)); balanceOf[f]-=v; balanceOf[t]+=v; emit Transfer(f,t,v); }
+    function _mint(address t, uint256 v) internal { totalSupply+=v; balanceOf[t]+=v; emit Transfer(address(0),t,v); }
+    function _burn(address f, uint256 v) internal { balanceOf[f]-=v; totalSupply-=v; emit Transfer(f,address(0),v); }
 }
 
-// ============================================================
-//  Minimal Ownable (no OZ dependency)
-// ============================================================
-abstract contract Ownable {
-    address public owner;
-
-    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-
-    constructor() {
-        owner = msg.sender;
-        emit OwnershipTransferred(address(0), msg.sender);
-    }
-
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Not owner");
-        _;
-    }
-
-    function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0), "zero address");
-        emit OwnershipTransferred(owner, newOwner);
-        owner = newOwner;
-    }
-}
-
-// ============================================================
-//  Minimal ERC721 base (no OZ dependency)
-// ============================================================
-abstract contract ERC721Base is Ownable {
-    string  public name;
-    string  public symbol;
-
-    mapping(uint256 => address) public ownerOf;
-    mapping(address => uint256) public balanceOf;
-    mapping(uint256 => address) public getApproved;
-    mapping(address => mapping(address => bool)) public isApprovedForAll;
-
-    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
-    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
-    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
-
-    constructor(string memory _name, string memory _symbol) {
-        name   = _name;
-        symbol = _symbol;
-    }
-
-    function supportsInterface(bytes4 id) external pure returns (bool) {
-        return id == 0x80ac58cd // ERC721
-            || id == 0x5b5e139f // ERC721Metadata
-            || id == 0x01ffc9a7; // ERC165
-    }
-
-    function approve(address to, uint256 tokenId) external {
-        address tokenOwner = ownerOf[tokenId];
-        require(msg.sender == tokenOwner || isApprovedForAll[tokenOwner][msg.sender], "Not authorized");
-        getApproved[tokenId] = to;
-        emit Approval(tokenOwner, to, tokenId);
-    }
-
-    function setApprovalForAll(address operator, bool approved) external {
-        isApprovedForAll[msg.sender][operator] = approved;
-        emit ApprovalForAll(msg.sender, operator, approved);
-    }
-
-    function transferFrom(address from, address to, uint256 tokenId) public virtual {
-        require(_isApproved(msg.sender, tokenId), "Not approved");
-        _transfer(from, to, tokenId);
-    }
-
-    function safeTransferFrom(address from, address to, uint256 tokenId) external {
-        safeTransferFrom(from, to, tokenId, "");
-    }
-
-    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory data) public virtual {
-        require(_isApproved(msg.sender, tokenId), "Not approved");
-        _transfer(from, to, tokenId);
-        _checkReceiver(msg.sender, from, to, tokenId, data);
-    }
-
-    function _isApproved(address spender, uint256 tokenId) internal view returns (bool) {
-        address tokenOwner = ownerOf[tokenId];
-        return spender == tokenOwner
-            || isApprovedForAll[tokenOwner][spender]
-            || getApproved[tokenId] == spender;
-    }
-
-    function _transfer(address from, address to, uint256 tokenId) internal {
-        require(ownerOf[tokenId] == from, "Wrong owner");
-        require(to != address(0), "zero address");
-        delete getApproved[tokenId];
-        balanceOf[from]--;
-        balanceOf[to]++;
-        ownerOf[tokenId] = to;
-        emit Transfer(from, to, tokenId);
-    }
-
-    function _mint(address to, uint256 tokenId) internal {
-        require(to != address(0), "zero address");
-        require(ownerOf[tokenId] == address(0), "Already minted");
-        balanceOf[to]++;
-        ownerOf[tokenId] = to;
-        emit Transfer(address(0), to, tokenId);
-    }
-
-    function _burn(uint256 tokenId) internal {
-        address tokenOwner = ownerOf[tokenId];
-        require(tokenOwner != address(0), "Not minted");
-        balanceOf[tokenOwner]--;
-        delete ownerOf[tokenId];
-        delete getApproved[tokenId];
-        emit Transfer(tokenOwner, address(0), tokenId);
-    }
-
-    function _checkReceiver(address operator, address from, address to, uint256 tokenId, bytes memory data) internal {
-        if (to.code.length > 0) {
-            bytes4 retval = IERC721Receiver(to).onERC721Received(operator, from, tokenId, data);
-            require(retval == 0x150b7a02, "non ERC721Receiver");
-        }
-    }
+abstract contract MintableERC20 is ERC20Base, Ownable {
+    mapping(address => bool) public minters;
+    constructor(string memory n, string memory s) ERC20Base(n,s) {}
+    modifier onlyMinter() { require(minters[msg.sender]||msg.sender==owner,"!minter"); _; }
+    function setMinter(address a, bool v) external onlyOwner { minters[a]=v; }
+    function mint(address t, uint256 v) external onlyMinter { _mint(t,v); }
+    function burn(address f, uint256 v) external onlyMinter { _burn(f,v); }
 }
 
 interface IERC721Receiver {
-    function onERC721Received(address, address, uint256, bytes calldata) external returns (bytes4);
+    function onERC721Received(address,address,uint256,bytes calldata) external returns (bytes4);
 }
 
-// ============================================================
-//  SettingsRegistry
-// ============================================================
-contract SettingsRegistry is Ownable {
-    mapping(bytes32 => uint256)  public uintOf;
-    mapping(bytes32 => address)  public addressOf;
-    mapping(bytes32 => bool)     public boolOf;
-    mapping(bytes32 => int256)   public intOf;
-    mapping(bytes32 => string)   public stringOf;
-
-    function setUintProperty(bytes32 k, uint256 v)          external onlyOwner { uintOf[k]    = v; }
-    function setAddressProperty(bytes32 k, address v)       external onlyOwner { addressOf[k] = v; }
-    function setBoolProperty(bytes32 k, bool v)             external onlyOwner { boolOf[k]    = v; }
-    function setIntProperty(bytes32 k, int256 v)            external onlyOwner { intOf[k]     = v; }
-    function setStringProperty(bytes32 k, string calldata v) external onlyOwner { stringOf[k] = v; }
-}
-
-// ============================================================
-//  ObjectOwnership  (ERC721 NFT for lands & apostles)
-// ============================================================
-contract ObjectOwnership is ERC721Base {
-    mapping(address => bool) public operators;
-
-    modifier onlyOperator() {
-        require(operators[msg.sender] || msg.sender == owner, "Not operator");
-        _;
+abstract contract ERC721Base is Ownable {
+    string public name; string public symbol;
+    mapping(uint256=>address) public ownerOf;
+    mapping(address=>uint256) public balanceOf;
+    mapping(uint256=>address) public getApproved;
+    mapping(address=>mapping(address=>bool)) public isApprovedForAll;
+    event Transfer(address indexed f, address indexed t, uint256 indexed id);
+    event Approval(address indexed o, address indexed a, uint256 indexed id);
+    event ApprovalForAll(address indexed o, address indexed op, bool v);
+    constructor(string memory n, string memory s) { name=n; symbol=s; }
+    function supportsInterface(bytes4 id) external pure returns(bool) {
+        return id==0x80ac58cd||id==0x5b5e139f||id==0x01ffc9a7;
     }
-
-    constructor() ERC721Base("Evolution Land Object", "ELO") {}
-
-    function setOperator(address op, bool enabled) external onlyOwner {
-        operators[op] = enabled;
+    function approve(address a, uint256 id) external {
+        address o=ownerOf[id]; require(msg.sender==o||isApprovedForAll[o][msg.sender]);
+        getApproved[id]=a; emit Approval(o,a,id);
     }
-
-    function mint(address to, uint256 tokenId) external onlyOperator {
-        _mint(to, tokenId);
+    function setApprovalForAll(address op, bool v) external { isApprovedForAll[msg.sender][op]=v; emit ApprovalForAll(msg.sender,op,v); }
+    function transferFrom(address f, address t, uint256 id) public virtual {
+        require(_ok(msg.sender,id)); _xfer(f,t,id);
     }
-
-    function burn(uint256 tokenId) external onlyOperator {
-        _burn(tokenId);
+    function safeTransferFrom(address f, address t, uint256 id) external { safeTransferFrom(f,t,id,""); }
+    function safeTransferFrom(address f, address t, uint256 id, bytes memory d) public virtual {
+        require(_ok(msg.sender,id)); _xfer(f,t,id); _chk(msg.sender,f,t,id,d);
     }
-
-    // Operator override: bypass per-token approval
-    function transferFrom(address from, address to, uint256 tokenId) public override {
-        if (operators[msg.sender]) { _transfer(from, to, tokenId); }
-        else { super.transferFrom(from, to, tokenId); }
+    function _ok(address s, uint256 id) internal view returns(bool) {
+        address o=ownerOf[id]; return s==o||isApprovedForAll[o][s]||getApproved[id]==s;
     }
-
-    function safeTransferFrom(address from, address to, uint256 tokenId, bytes memory data) public override {
-        if (operators[msg.sender]) {
-            _transfer(from, to, tokenId);
-            _checkReceiver(msg.sender, from, to, tokenId, data);
-        } else {
-            super.safeTransferFrom(from, to, tokenId, data);
-        }
+    function _xfer(address f, address t, uint256 id) internal {
+        require(ownerOf[id]==f&&t!=address(0)); delete getApproved[id];
+        balanceOf[f]--; balanceOf[t]++; ownerOf[id]=t; emit Transfer(f,t,id);
+    }
+    function _mint(address t, uint256 id) internal {
+        require(t!=address(0)&&ownerOf[id]==address(0)); balanceOf[t]++; ownerOf[id]=t; emit Transfer(address(0),t,id);
+    }
+    function _burn(uint256 id) internal {
+        address o=ownerOf[id]; require(o!=address(0)); balanceOf[o]--; delete ownerOf[id]; delete getApproved[id]; emit Transfer(o,address(0),id);
+    }
+    function _chk(address op, address f, address t, uint256 id, bytes memory d) internal {
+        if (t.code.length>0) require(IERC721Receiver(t).onERC721Received(op,f,id,d)==0x150b7a02,"!receiver");
     }
 }
 
-// ============================================================
-//  Operator-mintable ERC20 (base for RING, KTON, resources)
-// ============================================================
-abstract contract MintableERC20 is ERC20Base, Ownable {
-    mapping(address => bool) public operators;
+// ── Tokens ───────────────────────────────────────────────────
 
-    modifier onlyOperator() {
-        require(operators[msg.sender] || msg.sender == owner, "Not operator");
-        _;
-    }
-
-    constructor(string memory n, string memory s) ERC20Base(n, s) {}
-
-    function setOperator(address op, bool enabled) external onlyOwner {
-        operators[op] = enabled;
-    }
-
-    function mint(address to, uint256 amount) external onlyOperator {
-        _mint(to, amount);
-    }
-
-    function burn(address from, uint256 amount) external onlyOperator {
-        _burn(from, amount);
-    }
-}
-
-// ============================================================
-//  RING Token  (10000 initial supply to deployer)
-// ============================================================
+/// @notice RING — main game currency. 10,000 pre-minted to deployer.
 contract RingToken is MintableERC20 {
     constructor() MintableERC20("Evolution Land Ring", "RING") {
         _mint(msg.sender, 10_000 * 1e18);
     }
 }
 
-// ============================================================
-//  KTON Token
-// ============================================================
-contract KtonToken is MintableERC20 {
-    constructor() MintableERC20("Evolution Land Kton", "KTON") {}
-}
+contract GoldToken  is MintableERC20 { constructor() MintableERC20("EvoLand Gold",  "GOLD") {} }
+contract WoodToken  is MintableERC20 { constructor() MintableERC20("EvoLand Wood",  "WOOD") {} }
+contract WaterToken is MintableERC20 { constructor() MintableERC20("EvoLand Water", "HHO")  {} }
+contract FireToken  is MintableERC20 { constructor() MintableERC20("EvoLand Fire",  "FIRE") {} }
+contract SoilToken  is MintableERC20 { constructor() MintableERC20("EvoLand Soil",  "SIOO") {} }
 
-// ============================================================
-//  Resource Token (reused for GOLD/WOOD/HHO/FIRE/SIOO)
-// ============================================================
-contract ResourceToken is MintableERC20 {
-    constructor(string memory n, string memory s) MintableERC20(n, s) {}
-}
+// ── NFTs ─────────────────────────────────────────────────────
 
-// ============================================================
-//  RevenuePool
-// ============================================================
-contract RevenuePool is Ownable {
-    address public ring;
-    constructor(address _ring) { ring = _ring; }
+/**
+ * @notice LandNFT — 10,000 parcels (x 0-99, y 0-99)
+ *   tokenId = x * 100 + y + 1  (1-based, range 1-10000)
+ *   resourceAttr: packed uint80  [gold:16][wood:16][water:16][fire:16][soil:16]
+ *     each field is the land's base mining rate (1-1000 units/day per apostle)
+ */
+contract LandNFT is ERC721Base {
+    mapping(address => bool) public operators;
+    // resourceAttr packed: bits 0-15=gold, 16-31=wood, 32-47=water, 48-63=fire, 64-79=soil
+    mapping(uint256 => uint80) public resourceAttr;
+    // district tag (future use, default 1)
+    mapping(uint256 => uint8)  public district;
 
-    function withdraw(address to, uint256 amount) external onlyOwner {
-        require(ERC20Base(ring).transfer(to, amount), "failed");
+    event LandMinted(uint256 indexed tokenId, int16 x, int16 y, uint80 attr);
+
+    modifier onlyOperator() { require(operators[msg.sender]||msg.sender==owner,"!op"); _; }
+
+    constructor() ERC721Base("Evolution Land", "LAND") {}
+
+    function setOperator(address a, bool v) external onlyOwner { operators[a]=v; }
+
+    function encodeId(int16 x, int16 y) public pure returns (uint256) {
+        require(x>=0&&x<=99&&y>=0&&y<=99,"oob");
+        return uint256(uint16(x))*100 + uint256(uint16(y)) + 1;
+    }
+    function decodeId(uint256 id) public pure returns (int16 x, int16 y) {
+        uint256 idx = id - 1;
+        x = int16(int256(idx/100)); y = int16(int256(idx%100));
     }
 
-    function balance() external view returns (uint256) {
-        return ERC20Base(ring).balanceOf(address(this));
+    function mint(address to, int16 x, int16 y, uint80 attr) external onlyOperator {
+        uint256 id = encodeId(x,y);
+        resourceAttr[id] = attr; district[id] = 1;
+        _mint(to, id);
+        emit LandMinted(id, x, y, attr);
+    }
+
+    // Operator can transfer without per-token approval (auction contract)
+    function transferFrom(address f, address t, uint256 id) public override {
+        if (operators[msg.sender]) _xfer(f,t,id);
+        else super.transferFrom(f,t,id);
+    }
+    function safeTransferFrom(address f, address t, uint256 id, bytes memory d) public override {
+        if (operators[msg.sender]) { _xfer(f,t,id); _chk(msg.sender,f,t,id,d); }
+        else super.safeTransferFrom(f,t,id,d);
+    }
+
+    // Decode rate for a single resource (0=gold,1=wood,2=water,3=fire,4=soil)
+    function getRate(uint256 id, uint8 res) public view returns (uint16) {
+        return uint16(resourceAttr[id] >> (uint256(res)*16));
     }
 }
 
-// ============================================================
-//  LandBase
-// ============================================================
-contract LandBase is Ownable {
-    bytes32 public constant CONTRACT_OBJECT_OWNERSHIP =
-        keccak256(abi.encodePacked("CONTRACT_OBJECT_OWNERSHIP"));
-
-    struct LandAttr {
-        uint256 resourceRateAttr;
-        uint8   mask;
-        address originalOwner;
-        uint256 createdAt;
-    }
-
-    SettingsRegistry public registry;
-    mapping(uint256 => LandAttr) public tokenIdToLandAttr;
-    mapping(uint256 => uint256)  public tokenIndexToTokenId;
-    uint256 public totalLands;
+/**
+ * @notice DrillNFT — equipment NFT that boosts mining rate when equipped on land
+ *   tier 1-5:  boost multiplier = tier * 20%  (tier5 = 2x)
+ *   resource affinity: which resource it boosts (0-4)
+ */
+contract DrillNFT is ERC721Base {
+    uint256 public nextId = 1;
     mapping(address => bool) public operators;
 
-    event LandAssigned(uint256 indexed tokenId, int256 x, int256 y, address to);
+    struct DrillAttr { uint8 tier; uint8 affinity; } // affinity: 0=gold,1=wood,2=water,3=fire,4=soil
+    mapping(uint256 => DrillAttr) public attrs;
 
-    modifier onlyOperator() {
-        require(operators[msg.sender] || msg.sender == owner, "Not operator");
-        _;
+    event DrillMinted(uint256 indexed id, address to, uint8 tier, uint8 affinity);
+
+    modifier onlyOperator() { require(operators[msg.sender]||msg.sender==owner,"!op"); _; }
+
+    constructor() ERC721Base("EvoLand Drill", "DRILL") {}
+
+    function setOperator(address a, bool v) external onlyOwner { operators[a]=v; }
+
+    function mint(address to, uint8 tier, uint8 affinity) external onlyOperator returns (uint256 id) {
+        require(tier>=1&&tier<=5&&affinity<=4,"bad attr");
+        id = nextId++;
+        attrs[id] = DrillAttr(tier, affinity);
+        _mint(to, id);
+        emit DrillMinted(id, to, tier, affinity);
     }
 
-    constructor(address _registry) { registry = SettingsRegistry(_registry); }
+    function transferFrom(address f, address t, uint256 id) public override {
+        if (operators[msg.sender]) _xfer(f,t,id);
+        else super.transferFrom(f,t,id);
+    }
+    function safeTransferFrom(address f, address t, uint256 id, bytes memory d) public override {
+        if (operators[msg.sender]) { _xfer(f,t,id); _chk(msg.sender,f,t,id,d); }
+        else super.safeTransferFrom(f,t,id,d);
+    }
+}
 
-    function setOperator(address op, bool enabled) external onlyOwner {
-        operators[op] = enabled;
+/**
+ * @notice ApostleNFT — worker NFT sent to mine on lands
+ *   strength 1-100: affects mining output
+ *   Apostles are minted by the game owner (or via a future breeding system)
+ */
+contract ApostleNFT is ERC721Base {
+    uint256 public nextId = 1;
+    mapping(address => bool) public operators;
+
+    struct ApostleAttr { uint8 strength; uint8 element; } // element: 0-4 affinity
+    mapping(uint256 => ApostleAttr) public attrs;
+
+    event ApostleMinted(uint256 indexed id, address to, uint8 strength, uint8 element);
+
+    modifier onlyOperator() { require(operators[msg.sender]||msg.sender==owner,"!op"); _; }
+
+    constructor() ERC721Base("EvoLand Apostle", "APO") {}
+
+    function setOperator(address a, bool v) external onlyOwner { operators[a]=v; }
+
+    function mint(address to, uint8 strength, uint8 element) external onlyOperator returns (uint256 id) {
+        require(strength>=1&&strength<=100&&element<=4,"bad attr");
+        id = nextId++;
+        attrs[id] = ApostleAttr(strength, element);
+        _mint(to, id);
+        emit ApostleMinted(id, to, strength, element);
     }
 
-    function encodeTokenId(int256 x, int256 y) public pure returns (uint256) {
-        require(x >= 0 && x <= 99 && y >= 0 && y <= 99, "out of range");
-        return uint256(x * 10000 + y) + 1;
+    function transferFrom(address f, address t, uint256 id) public override {
+        if (operators[msg.sender]) _xfer(f,t,id);
+        else super.transferFrom(f,t,id);
+    }
+    function safeTransferFrom(address f, address t, uint256 id, bytes memory d) public override {
+        if (operators[msg.sender]) { _xfer(f,t,id); _chk(msg.sender,f,t,id,d); }
+        else super.safeTransferFrom(f,t,id,d);
+    }
+}
+
+// ── Mining System ─────────────────────────────────────────────
+
+/**
+ * @notice MiningSystem — core gameplay loop
+ *
+ *   Flow:
+ *     1. Land owner calls startMining(landId, apostleId, drillId)  [drillId=0 = no drill]
+ *     2. Resources accrue per second based on land rates + apostle strength + drill boost
+ *     3. Anyone calls claim(landId) to mint accrued resources to land owner
+ *     4. Land owner calls stopMining(landId, apostleId) to retrieve apostle
+ *
+ *   Formula (per second, per apostle slot):
+ *     output = landRate * apostleStrength/50 * drillMultiplier / 86400
+ *     drillMultiplier = 1.0 + tier*0.2  if drill affinity matches resource, else 1.0
+ *
+ *   Multiple apostles can work the same land (up to MAX_APOSTLES_PER_LAND = 5)
+ */
+contract MiningSystem is Ownable {
+    uint256 public constant MAX_APOSTLES_PER_LAND = 5;
+    uint256 public constant PRECISION = 1e12; // avoid truncation
+
+    LandNFT    public land;
+    DrillNFT   public drill;
+    ApostleNFT public apostle;
+
+    address[5] public resources; // [gold, wood, water, fire, soil]
+
+    struct Slot {
+        uint256 apostleId;
+        uint256 drillId;    // 0 = no drill
+        uint256 startTime;
+    }
+    // landId => list of active slots
+    mapping(uint256 => Slot[MAX_APOSTLES_PER_LAND]) public slots;
+    mapping(uint256 => uint256) public slotCount;
+
+    // Track which apostle / drill is locked
+    mapping(uint256 => uint256) public apostleOnLand; // apostleId => landId (0=free)
+    mapping(uint256 => uint256) public drillOnLand;   // drillId   => landId (0=free)
+
+    // Unclaimed balance per resource per land (accumulated before claim)
+    mapping(uint256 => uint256[5]) public pending;
+    uint256 public lastUpdate; // timestamp of last global flush (unused — per-slot tracking)
+
+    event MiningStarted(uint256 indexed landId, uint256 apostleId, uint256 drillId);
+    event MiningStopped(uint256 indexed landId, uint256 apostleId);
+    event Claimed(uint256 indexed landId, address indexed owner, uint256[5] amounts);
+
+    constructor(
+        address _land, address _drill, address _apostle,
+        address[5] memory _resources
+    ) {
+        land     = LandNFT(_land);
+        drill    = DrillNFT(_drill);
+        apostle  = ApostleNFT(_apostle);
+        resources = _resources;
     }
 
-    function decodeTokenId(uint256 tokenId) public pure returns (int256 x, int256 y) {
-        uint256 idx = tokenId - 1;
-        x = int256(idx / 10000);
-        y = int256(idx % 10000);
+    // ── Start Mining ─────────────────────────────────────────
+    function startMining(uint256 landId, uint256 apostleId, uint256 drillId) external {
+        require(land.ownerOf(landId) == msg.sender, "!land owner");
+        require(apostle.ownerOf(apostleId) == msg.sender, "!apostle owner");
+        require(apostleOnLand[apostleId] == 0, "apostle busy");
+        uint256 count = slotCount[landId];
+        require(count < MAX_APOSTLES_PER_LAND, "land full");
+
+        if (drillId != 0) {
+            require(drill.ownerOf(drillId) == msg.sender, "!drill owner");
+            require(drillOnLand[drillId] == 0, "drill busy");
+            // Transfer drill to this contract as escrow
+            drill.transferFrom(msg.sender, address(this), drillId);
+            drillOnLand[drillId] = landId;
+        }
+        // Transfer apostle to this contract as escrow
+        apostle.transferFrom(msg.sender, address(this), apostleId);
+        apostleOnLand[apostleId] = landId;
+
+        slots[landId][count] = Slot(apostleId, drillId, block.timestamp);
+        slotCount[landId] = count + 1;
+
+        emit MiningStarted(landId, apostleId, drillId);
     }
 
-    function batchAssignLands(
-        int256[] calldata xs, int256[] calldata ys, address to,
-        uint256[] calldata rates, uint8[] calldata masks
-    ) external onlyOperator {
-        ObjectOwnership oo = ObjectOwnership(registry.addressOf(CONTRACT_OBJECT_OWNERSHIP));
-        for (uint256 i = 0; i < xs.length; i++) {
-            uint256 tid = encodeTokenId(xs[i], ys[i]);
-            if (tokenIdToLandAttr[tid].createdAt != 0) continue;
-            tokenIdToLandAttr[tid] = LandAttr(rates[i], masks[i], to, block.timestamp);
-            totalLands++;
-            tokenIndexToTokenId[totalLands] = tid;
-            oo.mint(to, tid);
-            emit LandAssigned(tid, xs[i], ys[i], to);
+    // ── Stop Mining ──────────────────────────────────────────
+    function stopMining(uint256 landId, uint256 apostleId) external {
+        require(land.ownerOf(landId) == msg.sender, "!land owner");
+        _flushLand(landId);
+
+        uint256 count = slotCount[landId];
+        bool found = false;
+        for (uint256 i = 0; i < count; i++) {
+            if (slots[landId][i].apostleId == apostleId) {
+                uint256 drillId = slots[landId][i].drillId;
+                // Return NFTs
+                apostle.transferFrom(address(this), msg.sender, apostleId);
+                apostleOnLand[apostleId] = 0;
+                if (drillId != 0) {
+                    drill.transferFrom(address(this), msg.sender, drillId);
+                    drillOnLand[drillId] = 0;
+                }
+                // Compact slot array
+                slots[landId][i] = slots[landId][count-1];
+                delete slots[landId][count-1];
+                slotCount[landId] = count - 1;
+                found = true;
+                break;
+            }
+        }
+        require(found, "apostle not here");
+        emit MiningStopped(landId, apostleId);
+    }
+
+    // ── Claim ────────────────────────────────────────────────
+    function claim(uint256 landId) external {
+        _flushLand(landId);
+        address owner = land.ownerOf(landId);
+        uint256[5] memory amounts;
+        for (uint8 r = 0; r < 5; r++) {
+            uint256 amt = pending[landId][r];
+            if (amt > 0) {
+                pending[landId][r] = 0;
+                amounts[r] = amt;
+                MintableERC20(resources[r]).mint(owner, amt);
+            }
+        }
+        emit Claimed(landId, owner, amounts);
+    }
+
+    // ── View: how much is available to claim ─────────────────
+    function pendingRewards(uint256 landId) external view returns (uint256[5] memory res) {
+        for (uint8 r = 0; r < 5; r++) res[r] = pending[landId][r];
+        uint256 count = slotCount[landId];
+        for (uint256 i = 0; i < count; i++) {
+            Slot storage s = slots[landId][i];
+            uint256 elapsed = block.timestamp - s.startTime;
+            uint256[5] memory inc = _calcIncrement(landId, s, elapsed);
+            for (uint8 r = 0; r < 5; r++) res[r] += inc[r];
         }
     }
 
-    function getLandAttr(uint256 tokenId) external view returns (
-        uint256 resourceRateAttr, uint8 mask, address originalOwner, uint256 createdAt
-    ) {
-        LandAttr storage la = tokenIdToLandAttr[tokenId];
-        return (la.resourceRateAttr, la.mask, la.originalOwner, la.createdAt);
+    // ── Internal ─────────────────────────────────────────────
+    function _flushLand(uint256 landId) internal {
+        uint256 count = slotCount[landId];
+        for (uint256 i = 0; i < count; i++) {
+            Slot storage s = slots[landId][i];
+            uint256 elapsed = block.timestamp - s.startTime;
+            if (elapsed == 0) continue;
+            uint256[5] memory inc = _calcIncrement(landId, s, elapsed);
+            for (uint8 r = 0; r < 5; r++) pending[landId][r] += inc[r];
+            s.startTime = block.timestamp; // reset timer
+        }
+    }
+
+    function _calcIncrement(uint256 landId, Slot storage s, uint256 elapsed)
+        internal view returns (uint256[5] memory inc)
+    {
+        ApostleNFT.ApostleAttr memory aa = _getApostleAttr(s.apostleId);
+        DrillNFT.DrillAttr memory da;
+        bool hasDrill = s.drillId != 0;
+        if (hasDrill) da = _getDrillAttr(s.drillId);
+
+        for (uint8 r = 0; r < 5; r++) {
+            uint256 rate = land.getRate(landId, r); // base rate (units/day)
+            if (rate == 0) continue;
+            // apostle strength factor:  strength/50  (strength=50 → 1x)
+            uint256 strength = aa.strength; // 1-100
+            // drill boost: +tier*20% if affinity matches
+            uint256 boost = 100; // 100% base
+            if (hasDrill && da.affinity == r) boost += uint256(da.tier) * 20;
+            // output = rate * strength * boost * elapsed / (50 * 100 * 86400)
+            inc[r] = rate * 1e18 * strength * boost * elapsed / (50 * 100 * 86400 * PRECISION);
+        }
+    }
+
+    // Work around stack-too-deep for struct reads
+    function _getApostleAttr(uint256 id) internal view returns (ApostleNFT.ApostleAttr memory) {
+        (uint8 s, uint8 e) = apostle.attrs(id);
+        return ApostleNFT.ApostleAttr(s, e);
+    }
+    function _getDrillAttr(uint256 id) internal view returns (DrillNFT.DrillAttr memory) {
+        (uint8 t, uint8 a) = drill.attrs(id);
+        return DrillNFT.DrillAttr(t, a);
+    }
+
+    // ERC721 receiver (to hold escrowed apostles/drills)
+    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+        return 0x150b7a02;
     }
 }
 
-// ============================================================
-//  ClockAuction  (Dutch auction, 4% cut)
-// ============================================================
-contract ClockAuction is Ownable {
-    bytes32 public constant CONTRACT_RING_ERC20_TOKEN =
-        keccak256(abi.encodePacked("CONTRACT_RING_ERC20_TOKEN"));
-    bytes32 public constant CONTRACT_REVENUE_POOL =
-        keccak256(abi.encodePacked("CONTRACT_REVENUE_POOL"));
-    bytes32 public constant CONTRACT_OBJECT_OWNERSHIP =
-        keccak256(abi.encodePacked("CONTRACT_OBJECT_OWNERSHIP"));
+// ── Dutch Auction (Land primary sale) ────────────────────────
 
-    uint256 public constant AUCTION_CUT = 400;
-    uint256 public constant CUT_BASE    = 10000;
+/**
+ * @notice LandAuction — Dutch auction for land parcels
+ *   Seller lists a land, price linearly drops from startPrice to endPrice over duration.
+ *   Buyer pays RING. 4% fee kept by contract owner.
+ */
+contract LandAuction is Ownable {
+    uint256 public constant FEE_BPS = 400;   // 4%
+    uint256 public constant BPS     = 10000;
+
+    LandNFT  public land;
+    address  public ring;
 
     struct Auction {
         address seller;
@@ -399,220 +456,103 @@ contract ClockAuction is Ownable {
         uint64  duration;
         uint64  startedAt;
     }
-
-    SettingsRegistry public registry;
     mapping(uint256 => Auction) public auctions;
-    bool private _locked;
+    bool private _lock;
 
-    modifier nonReentrant() {
-        require(!_locked, "reentrant");
-        _locked = true;
-        _;
-        _locked = false;
+    event AuctionCreated(uint256 indexed id, address seller, uint128 start, uint128 end, uint64 duration);
+    event AuctionWon(uint256 indexed id, address buyer, uint256 price);
+    event AuctionCancelled(uint256 indexed id);
+
+    modifier noReentrant() { require(!_lock); _lock=true; _; _lock=false; }
+
+    constructor(address _land, address _ring) { land=LandNFT(_land); ring=_ring; }
+
+    function createAuction(uint256 id, uint128 startPrice, uint128 endPrice, uint64 duration) external noReentrant {
+        require(land.ownerOf(id)==msg.sender,"!owner");
+        require(duration>=60&&duration<=30 days);
+        require(startPrice>=endPrice);
+        land.transferFrom(msg.sender, address(this), id);
+        auctions[id] = Auction(msg.sender, startPrice, endPrice, duration, uint64(block.timestamp));
+        emit AuctionCreated(id, msg.sender, startPrice, endPrice, duration);
     }
 
-    event AuctionCreated(uint256 indexed tokenId, address indexed seller, uint256 startPrice, uint256 endPrice, uint256 duration);
-    event AuctionSuccessful(uint256 indexed tokenId, address indexed buyer, uint256 price);
-    event AuctionCancelled(uint256 indexed tokenId);
-
-    constructor(address _registry) { registry = SettingsRegistry(_registry); }
-
-    function createAuction(uint256 tokenId, uint256 startPrice, uint256 endPrice, uint256 duration) external nonReentrant {
-        require(duration >= 60 && duration <= 30 days, "bad duration");
-        require(startPrice >= endPrice, "start >= end");
-        ObjectOwnership nft = ObjectOwnership(registry.addressOf(CONTRACT_OBJECT_OWNERSHIP));
-        require(nft.ownerOf(tokenId) == msg.sender, "not owner");
-        nft.transferFrom(msg.sender, address(this), tokenId);
-        auctions[tokenId] = Auction(msg.sender, uint128(startPrice), uint128(endPrice), uint64(duration), uint64(block.timestamp));
-        emit AuctionCreated(tokenId, msg.sender, startPrice, endPrice, duration);
-    }
-
-    function bid(uint256 tokenId, uint256 maxPrice) external nonReentrant {
-        Auction storage a = auctions[tokenId];
-        require(a.startedAt > 0, "no auction");
-        uint256 price = currentPrice(tokenId);
-        require(maxPrice >= price, "price too low");
-        ERC20Base ring = ERC20Base(registry.addressOf(CONTRACT_RING_ERC20_TOKEN));
-        require(ring.transferFrom(msg.sender, address(this), price), "ring failed");
-        uint256 cut = price * AUCTION_CUT / CUT_BASE;
-        require(ring.transfer(a.seller, price - cut), "seller pay failed");
-        address pool = registry.addressOf(CONTRACT_REVENUE_POOL);
-        if (pool != address(0) && cut > 0) ring.transfer(pool, cut);
+    function bid(uint256 id, uint256 maxPay) external noReentrant {
+        Auction storage a = auctions[id];
+        require(a.startedAt>0,"no auction");
+        uint256 price = currentPrice(id);
+        require(maxPay>=price,"too low");
+        uint256 fee = price*FEE_BPS/BPS;
+        ERC20Base r = ERC20Base(ring);
+        require(r.transferFrom(msg.sender, a.seller, price-fee),"ring fail");
+        if (fee>0) r.transferFrom(msg.sender, owner, fee);
         address seller = a.seller;
-        delete auctions[tokenId];
-        ObjectOwnership(registry.addressOf(CONTRACT_OBJECT_OWNERSHIP)).transferFrom(address(this), msg.sender, tokenId);
-        emit AuctionSuccessful(tokenId, msg.sender, price);
+        delete auctions[id];
+        land.transferFrom(address(this), msg.sender, id);
+        emit AuctionWon(id, msg.sender, price);
     }
 
-    function cancelAuction(uint256 tokenId) external nonReentrant {
-        Auction storage a = auctions[tokenId];
-        require(a.startedAt > 0, "no auction");
-        require(a.seller == msg.sender || msg.sender == owner, "not seller");
+    function cancelAuction(uint256 id) external noReentrant {
+        Auction storage a = auctions[id];
+        require(a.startedAt>0);
+        require(a.seller==msg.sender||msg.sender==owner);
         address seller = a.seller;
-        delete auctions[tokenId];
-        ObjectOwnership(registry.addressOf(CONTRACT_OBJECT_OWNERSHIP)).transferFrom(address(this), seller, tokenId);
-        emit AuctionCancelled(tokenId);
+        delete auctions[id];
+        land.transferFrom(address(this), seller, id);
+        emit AuctionCancelled(id);
     }
 
-    function currentPrice(uint256 tokenId) public view returns (uint256) {
-        Auction storage a = auctions[tokenId];
-        require(a.startedAt > 0, "no auction");
+    function currentPrice(uint256 id) public view returns (uint256) {
+        Auction storage a = auctions[id];
+        require(a.startedAt>0);
         uint256 elapsed = block.timestamp - a.startedAt;
-        if (elapsed >= a.duration) return a.endPrice;
-        uint256 diff = a.startPrice > a.endPrice ? a.startPrice - a.endPrice : 0;
-        return a.startPrice - diff * elapsed / a.duration;
+        if (elapsed>=a.duration) return a.endPrice;
+        uint256 diff = a.startPrice - a.endPrice;
+        return a.startPrice - diff*elapsed/a.duration;
     }
 
-    // Accept NFT transfers
-    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+    function onERC721Received(address,address,uint256,bytes calldata) external pure returns (bytes4) {
         return 0x150b7a02;
     }
 }
 
-// ============================================================
-//  GringottsBank  (RING staking -> KTON rewards)
-// ============================================================
-contract GringottsBank is Ownable {
-    uint256 public constant MONTH = 30 days;
+// ── LandInitializer (batch-mint 10000 lands) ──────────────────
 
-    struct Stake {
-        uint256 amount;
-        uint256 startTime;
-        uint256 months;
-        uint256 ktonMinted;
-        bool    active;
+/**
+ * @notice LandInitializer — owner utility to batch-mint lands and start genesis auctions.
+ *         Can be called after deployment, then ownership can be revoked.
+ */
+contract LandInitializer is Ownable {
+    LandNFT     public land;
+    LandAuction public auction;
+    address     public ring;
+    bool        public initialized;
+
+    constructor(address _land, address _auction, address _ring) {
+        land=LandNFT(_land); auction=LandAuction(_auction); ring=_ring;
     }
 
-    address public ring;
-    address public kton;
-    mapping(address => Stake[]) public stakes;
-
-    event Staked(address indexed user, uint256 id, uint256 amount, uint256 months, uint256 kton);
-    event Unstaked(address indexed user, uint256 id, uint256 amount, bool early);
-
-    constructor(address _ring, address _kton) { ring = _ring; kton = _kton; }
-
-    function stakeRING(uint256 amount, uint256 months_) external {
-        require(amount > 0 && months_ >= 1 && months_ <= 36, "bad params");
-        require(ERC20Base(ring).transferFrom(msg.sender, address(this), amount), "ring failed");
-        uint256 reward = amount * 67 * months_ / 197 / 10000;
-        uint256 id = stakes[msg.sender].length;
-        stakes[msg.sender].push(Stake(amount, block.timestamp, months_, reward, true));
-        KtonToken(kton).mint(msg.sender, reward);
-        emit Staked(msg.sender, id, amount, months_, reward);
-    }
-
-    function unstakeRING(uint256 id, bool earlyUnlock) external {
-        Stake storage s = stakes[msg.sender][id];
-        require(s.active, "not active");
-        bool expired = block.timestamp >= s.startTime + s.months * MONTH;
-        if (!expired) {
-            require(earlyUnlock, "not expired");
-            KtonToken(kton).burn(msg.sender, s.ktonMinted * 3);
+    function batchMint(
+        int16[] calldata xs,
+        int16[] calldata ys,
+        uint80[] calldata attrs,
+        address to
+    ) external onlyOwner {
+        for (uint256 i=0; i<xs.length; i++) {
+            land.mint(to, xs[i], ys[i], attrs[i]);
         }
-        uint256 amount = s.amount;
-        s.active = false;
-        require(ERC20Base(ring).transfer(msg.sender, amount), "ring failed");
-        emit Unstaked(msg.sender, id, amount, !expired);
     }
 
-    function getStake(address user, uint256 id) external view returns (
-        uint256 amount, uint256 startTime, uint256 months, uint256 ktonMinted, bool active, bool expired
-    ) {
-        Stake storage s = stakes[user][id];
-        return (s.amount, s.startTime, s.months, s.ktonMinted, s.active,
-                block.timestamp >= s.startTime + s.months * MONTH);
-    }
-}
-
-// ============================================================
-//  LandResource  (mining system)
-// ============================================================
-contract LandResource is Ownable {
-    bytes32 public constant CONTRACT_LAND_BASE =
-        keccak256(abi.encodePacked("CONTRACT_LAND_BASE"));
-    bytes32 public constant CONTRACT_OBJECT_OWNERSHIP =
-        keccak256(abi.encodePacked("CONTRACT_OBJECT_OWNERSHIP"));
-    bytes32 public constant CONTRACT_GOLD_ERC20_TOKEN =
-        keccak256(abi.encodePacked("CONTRACT_GOLD_ERC20_TOKEN"));
-    bytes32 public constant CONTRACT_WOOD_ERC20_TOKEN =
-        keccak256(abi.encodePacked("CONTRACT_WOOD_ERC20_TOKEN"));
-    bytes32 public constant CONTRACT_WATER_ERC20_TOKEN =
-        keccak256(abi.encodePacked("CONTRACT_WATER_ERC20_TOKEN"));
-    bytes32 public constant CONTRACT_FIRE_ERC20_TOKEN =
-        keccak256(abi.encodePacked("CONTRACT_FIRE_ERC20_TOKEN"));
-    bytes32 public constant CONTRACT_SOIL_ERC20_TOKEN =
-        keccak256(abi.encodePacked("CONTRACT_SOIL_ERC20_TOKEN"));
-
-    uint256 public constant BASE_RATE = 11574074074074; // 1e18/86400
-
-    SettingsRegistry public registry;
-    mapping(uint256 => uint256) public lastClaimTime;
-    mapping(uint256 => uint256) public apostleCount;
-
-    event StartMining(uint256 indexed land, uint256 indexed apostle);
-    event StopMining(uint256 indexed land, uint256 indexed apostle);
-    event Claimed(uint256 indexed land, address owner);
-
-    constructor(address _registry) { registry = SettingsRegistry(_registry); }
-
-    function startMining(uint256 landId, uint256 apostleId) external {
-        _claim(landId);
-        apostleCount[landId]++;
-        if (lastClaimTime[landId] == 0) lastClaimTime[landId] = block.timestamp;
-        emit StartMining(landId, apostleId);
-    }
-
-    function stopMining(uint256 landId, uint256 apostleId) external {
-        require(apostleCount[landId] > 0, "none mining");
-        _claim(landId);
-        apostleCount[landId]--;
-        emit StopMining(landId, apostleId);
-    }
-
-    function claimResources(uint256 landId) external { _claim(landId); }
-
-    function _claim(uint256 landId) internal {
-        uint256 count = apostleCount[landId];
-        uint256 last  = lastClaimTime[landId];
-        if (last == 0) { lastClaimTime[landId] = block.timestamp; return; }
-        uint256 elapsed = block.timestamp - last;
-        if (elapsed == 0 || count == 0) { lastClaimTime[landId] = block.timestamp; return; }
-
-        LandBase lb = LandBase(registry.addressOf(CONTRACT_LAND_BASE));
-        (uint256 attr,,,) = lb.getLandAttr(landId);
-        address owner_ = ObjectOwnership(registry.addressOf(CONTRACT_OBJECT_OWNERSHIP)).ownerOf(landId);
-        if (owner_ == address(0)) { lastClaimTime[landId] = block.timestamp; return; }
-
-        _mintRes(CONTRACT_GOLD_ERC20_TOKEN,  0, attr, elapsed, count, owner_);
-        _mintRes(CONTRACT_WOOD_ERC20_TOKEN,  1, attr, elapsed, count, owner_);
-        _mintRes(CONTRACT_WATER_ERC20_TOKEN, 2, attr, elapsed, count, owner_);
-        _mintRes(CONTRACT_FIRE_ERC20_TOKEN,  3, attr, elapsed, count, owner_);
-        _mintRes(CONTRACT_SOIL_ERC20_TOKEN,  4, attr, elapsed, count, owner_);
-        lastClaimTime[landId] = block.timestamp;
-        emit Claimed(landId, owner_);
-    }
-
-    function _mintRes(bytes32 key, uint8 idx, uint256 attr, uint256 elapsed, uint256 count, address to) internal {
-        uint16 rate = uint16((attr >> (uint256(idx) * 16)) & 0xFFFF);
-        if (rate == 0) return;
-        uint256 amt = uint256(rate) * elapsed * BASE_RATE * count / 1e12;
-        if (amt == 0) return;
-        address tok = registry.addressOf(key);
-        if (tok != address(0)) ResourceToken(tok).mint(to, amt);
-    }
-
-    function available(uint256 landId) external view returns (uint256[5] memory res) {
-        uint256 count = apostleCount[landId];
-        uint256 last  = lastClaimTime[landId];
-        if (last == 0 || count == 0) return res;
-        uint256 elapsed = block.timestamp - last;
-        LandBase lb = LandBase(registry.addressOf(CONTRACT_LAND_BASE));
-        (uint256 attr,,,) = lb.getLandAttr(landId);
-        for (uint8 i = 0; i < 5; i++) {
-            uint16 rate = uint16((attr >> (uint256(i) * 16)) & 0xFFFF);
-            if (rate == 0) continue;
-            res[i] = uint256(rate) * elapsed * BASE_RATE * count / 1e12;
+    function createGenesisAuctions(
+        uint256[] calldata ids,
+        uint128 startPrice,
+        uint128 endPrice,
+        uint64  duration
+    ) external onlyOwner {
+        // approve auction contract to transfer
+        // (deployer must have called land.setOperator(initializer, true))
+        for (uint256 i=0; i<ids.length; i++) {
+            try auction.createAuction(ids[i], startPrice, endPrice, duration) {}
+            catch {}
         }
     }
 }

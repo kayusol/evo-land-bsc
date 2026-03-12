@@ -1,229 +1,165 @@
 const { ethers } = require("hardhat");
 const fs = require("fs");
 
-// Must match contracts: keccak256(abi.encodePacked("KEY"))
-function key(name) {
-  return ethers.keccak256(ethers.toUtf8Bytes(name));
+// Resource rate encoding: 5x uint16 packed into uint80
+// bits [0-15]=gold, [16-31]=wood, [32-47]=water, [48-63]=fire, [64-79]=soil
+function encodeAttr(g, w, wa, f, s) {
+  return BigInt(g) | (BigInt(w)<<16n) | (BigInt(wa)<<32n) | (BigInt(f)<<48n) | (BigInt(s)<<64n);
 }
 
-function encodeResourceRate(gold, wood, water, fire, soil) {
-  return BigInt(gold) | (BigInt(wood) << 16n) | (BigInt(water) << 32n) | (BigInt(fire) << 48n) | (BigInt(soil) << 64n);
-}
-
-function generateLandData() {
-  const xs = [], ys = [], rates = [], masks = [];
-  for (let x = 0; x <= 99; x++) {
-    for (let y = 0; y <= 99; y++) {
-      const seed = x * 137 + y * 97;
-      const gold  = ((seed *  3 + 10) % 100) + 5;
-      const wood  = ((seed *  7 + 20) % 100) + 5;
-      const water = ((seed * 11 + 30) % 100) + 5;
-      const fire  = ((seed * 13 + 40) % 100) + 5;
-      const soil  = ((seed * 17 + 50) % 100) + 5;
-      let mask = 0;
-      if ((x === 0 && y === 0) || (x === 99 && y === 99) ||
-          (x === 0 && y === 99) || (x === 99 && y === 0) ||
-          (x === 49 && y === 49) || (x === 50 && y === 50)) {
-        mask = 2;
-      }
+function landData() {
+  const xs=[], ys=[], attrs=[];
+  for (let x=0; x<=99; x++) {
+    for (let y=0; y<=99; y++) {
+      const seed = x*137+y*97;
       xs.push(x); ys.push(y);
-      rates.push(encodeResourceRate(gold, wood, water, fire, soil).toString());
-      masks.push(mask);
+      attrs.push(encodeAttr(
+        (seed*3  +10)%100+5,
+        (seed*7  +20)%100+5,
+        (seed*11 +30)%100+5,
+        (seed*13 +40)%100+5,
+        (seed*17 +50)%100+5
+      ).toString());
     }
   }
-  return { xs, ys, rates, masks };
-}
-
-// Helper: send tx with fresh nonce to avoid "nonce too low" after retries
-async function sendTx(provider, signer, contractMethod, ...args) {
-  const nonce = await provider.getTransactionCount(signer.address, "latest");
-  const tx = await contractMethod(...args, { nonce });
-  return tx.wait();
+  return {xs, ys, attrs};
 }
 
 async function main() {
   const [deployer] = await ethers.getSigners();
-  console.log("Deploying from:", deployer.address);
-  const balance = await ethers.provider.getBalance(deployer.address);
-  console.log("Balance:", ethers.formatEther(balance), "tBNB\n");
+  console.log("Deployer :", deployer.address);
+  console.log("Balance  :", ethers.formatEther(await ethers.provider.getBalance(deployer.address)), "tBNB\n");
 
-  const deployed = {};
+  const dep = {};
 
-  // 1. SettingsRegistry
-  console.log("[1/10] Deploying SettingsRegistry...");
-  const registry = await (await ethers.getContractFactory("SettingsRegistry")).deploy();
-  await registry.waitForDeployment();
-  deployed.settingsRegistry = await registry.getAddress();
-  console.log(" =>", deployed.settingsRegistry);
-
-  // 2. ObjectOwnership
-  console.log("[2/10] Deploying ObjectOwnership...");
-  const objectOwnership = await (await ethers.getContractFactory("ObjectOwnership")).deploy();
-  await objectOwnership.waitForDeployment();
-  deployed.objectOwnership = await objectOwnership.getAddress();
-  console.log(" =>", deployed.objectOwnership);
-
-  // 3. RING
-  console.log("[3/10] Deploying RING Token...");
+  // ── Tokens ───────────────────────────────────────────────────
+  console.log("[1] Deploying RING...");
   const ring = await (await ethers.getContractFactory("RingToken")).deploy();
-  await ring.waitForDeployment();
-  deployed.ring = await ring.getAddress();
-  console.log(" =>", deployed.ring, "(supply:", ethers.formatEther(await ring.totalSupply()), "RING)");
+  await ring.waitForDeployment(); dep.ring = await ring.getAddress();
+  console.log("  RING:", dep.ring);
 
-  // 4. KTON
-  console.log("[4/10] Deploying KTON Token...");
-  const kton = await (await ethers.getContractFactory("KtonToken")).deploy();
-  await kton.waitForDeployment();
-  deployed.kton = await kton.getAddress();
-  console.log(" =>", deployed.kton);
-
-  // 5. Resource tokens
-  console.log("[5/10] Deploying Resource Tokens...");
-  const RT = await ethers.getContractFactory("ResourceToken");
-  const gold  = await (await RT.deploy("Evolution Land Gold",  "GOLD")).waitForDeployment();
-  const wood  = await (await RT.deploy("Evolution Land Wood",  "WOOD")).waitForDeployment();
-  const water = await (await RT.deploy("Evolution Land Water", "HHO" )).waitForDeployment();
-  const fire  = await (await RT.deploy("Evolution Land Fire",  "FIRE")).waitForDeployment();
-  const soil  = await (await RT.deploy("Evolution Land Soil",  "SIOO")).waitForDeployment();
-  deployed.gold  = await gold.getAddress();
-  deployed.wood  = await wood.getAddress();
-  deployed.water = await water.getAddress();
-  deployed.fire  = await fire.getAddress();
-  deployed.soil  = await soil.getAddress();
-  console.log(" GOLD:", deployed.gold);
-  console.log(" WOOD:", deployed.wood);
-  console.log("  HHO:", deployed.water);
-  console.log(" FIRE:", deployed.fire);
-  console.log(" SIOO:", deployed.soil);
-
-  // 6. RevenuePool
-  console.log("[6/10] Deploying RevenuePool...");
-  const revenuePool = await (await ethers.getContractFactory("RevenuePool")).deploy(deployed.ring);
-  await revenuePool.waitForDeployment();
-  deployed.revenuePool = await revenuePool.getAddress();
-  console.log(" =>", deployed.revenuePool);
-
-  // 7. LandBase
-  console.log("[7/10] Deploying LandBase...");
-  const landBase = await (await ethers.getContractFactory("LandBase")).deploy(deployed.settingsRegistry);
-  await landBase.waitForDeployment();
-  deployed.landBase = await landBase.getAddress();
-  console.log(" =>", deployed.landBase);
-
-  // 8. ClockAuction
-  console.log("[8/10] Deploying ClockAuction...");
-  const clockAuction = await (await ethers.getContractFactory("ClockAuction")).deploy(deployed.settingsRegistry);
-  await clockAuction.waitForDeployment();
-  deployed.clockAuction = await clockAuction.getAddress();
-  console.log(" =>", deployed.clockAuction);
-
-  // 9. GringottsBank
-  console.log("[9/10] Deploying GringottsBank...");
-  const bank = await (await ethers.getContractFactory("GringottsBank")).deploy(deployed.ring, deployed.kton);
-  await bank.waitForDeployment();
-  deployed.bank = await bank.getAddress();
-  console.log(" =>", deployed.bank);
-
-  // 10. LandResource
-  console.log("[10/10] Deploying LandResource...");
-  const landResource = await (await ethers.getContractFactory("LandResource")).deploy(deployed.settingsRegistry);
-  await landResource.waitForDeployment();
-  deployed.landResource = await landResource.getAddress();
-  console.log(" =>", deployed.landResource);
-
-  // Configure SettingsRegistry
-  console.log("\n--- Configuring SettingsRegistry ---");
-  const entries = [
-    ["CONTRACT_OBJECT_OWNERSHIP", deployed.objectOwnership],
-    ["CONTRACT_RING_ERC20_TOKEN",  deployed.ring],
-    ["CONTRACT_KTON_ERC20_TOKEN",  deployed.kton],
-    ["CONTRACT_GOLD_ERC20_TOKEN",  deployed.gold],
-    ["CONTRACT_WOOD_ERC20_TOKEN",  deployed.wood],
-    ["CONTRACT_WATER_ERC20_TOKEN", deployed.water],
-    ["CONTRACT_FIRE_ERC20_TOKEN",  deployed.fire],
-    ["CONTRACT_SOIL_ERC20_TOKEN",  deployed.soil],
-    ["CONTRACT_REVENUE_POOL",      deployed.revenuePool],
-    ["CONTRACT_LAND_BASE",         deployed.landBase],
-    ["CONTRACT_LAND_RESOURCE",     deployed.landResource],
-    ["CONTRACT_CLOCK_AUCTION",     deployed.clockAuction],
+  const tokenNames = [
+    ["GoldToken",  "gold"],
+    ["WoodToken",  "wood"],
+    ["WaterToken", "water"],
+    ["FireToken",  "fire"],
+    ["SoilToken",  "soil"],
   ];
-  for (const [name, addr] of entries) {
-    const nonce = await ethers.provider.getTransactionCount(deployer.address, "latest");
-    const tx = await registry.setAddressProperty(key(name), addr, { nonce });
-    await tx.wait();
-    console.log(` [${name}] = ${addr}`);
+  console.log("[2] Deploying resource tokens...");
+  for (const [cname, key] of tokenNames) {
+    const t = await (await ethers.getContractFactory(cname)).deploy();
+    await t.waitForDeployment(); dep[key] = await t.getAddress();
+    console.log(`  ${cname}: ${dep[key]}`);
   }
 
-  // Set Operators
-  console.log("\n--- Setting Operators ---");
-  let nonce = await ethers.provider.getTransactionCount(deployer.address, "latest");
+  // ── NFTs ─────────────────────────────────────────────────────
+  console.log("[3] Deploying LandNFT...");
+  const land = await (await ethers.getContractFactory("LandNFT")).deploy();
+  await land.waitForDeployment(); dep.land = await land.getAddress();
+  console.log("  LandNFT:", dep.land);
 
+  console.log("[4] Deploying DrillNFT...");
+  const drill = await (await ethers.getContractFactory("DrillNFT")).deploy();
+  await drill.waitForDeployment(); dep.drill = await drill.getAddress();
+  console.log("  DrillNFT:", dep.drill);
+
+  console.log("[5] Deploying ApostleNFT...");
+  const apo = await (await ethers.getContractFactory("ApostleNFT")).deploy();
+  await apo.waitForDeployment(); dep.apostle = await apo.getAddress();
+  console.log("  ApostleNFT:", dep.apostle);
+
+  // ── Systems ───────────────────────────────────────────────────
+  console.log("[6] Deploying MiningSystem...");
+  const mining = await (await ethers.getContractFactory("MiningSystem")).deploy(
+    dep.land, dep.drill, dep.apostle,
+    [dep.gold, dep.wood, dep.water, dep.fire, dep.soil]
+  );
+  await mining.waitForDeployment(); dep.mining = await mining.getAddress();
+  console.log("  MiningSystem:", dep.mining);
+
+  console.log("[7] Deploying LandAuction...");
+  const auction = await (await ethers.getContractFactory("LandAuction")).deploy(dep.land, dep.ring);
+  await auction.waitForDeployment(); dep.auction = await auction.getAddress();
+  console.log("  LandAuction:", dep.auction);
+
+  console.log("[8] Deploying LandInitializer...");
+  const init = await (await ethers.getContractFactory("LandInitializer")).deploy(
+    dep.land, dep.auction, dep.ring
+  );
+  await init.waitForDeployment(); dep.initializer = await init.getAddress();
+  console.log("  LandInitializer:", dep.initializer);
+
+  // ── Permissions ───────────────────────────────────────────────
+  console.log("\n[9] Setting permissions...");
   let tx;
-  tx = await objectOwnership.setOperator(deployed.landBase, true, { nonce: nonce++ });
-  await tx.wait();
-  tx = await objectOwnership.setOperator(deployed.clockAuction, true, { nonce: nonce++ });
-  await tx.wait();
-  tx = await landBase.setOperator(deployer.address, true, { nonce: nonce++ });
-  await tx.wait();
-  for (const token of [gold, wood, water, fire, soil]) {
-    tx = await token.setOperator(deployed.landResource, true, { nonce: nonce++ });
+
+  // LandNFT operators: initializer (mint), auction (transfer), mining (transfer check)
+  tx = await (await ethers.getContractAt("LandNFT", dep.land)).setOperator(dep.initializer, true); await tx.wait();
+  tx = await (await ethers.getContractAt("LandNFT", dep.land)).setOperator(dep.auction, true);     await tx.wait();
+  tx = await (await ethers.getContractAt("LandNFT", dep.land)).setOperator(dep.mining, true);      await tx.wait();
+
+  // DrillNFT operator: mining (escrow)
+  tx = await (await ethers.getContractAt("DrillNFT", dep.drill)).setOperator(dep.mining, true); await tx.wait();
+
+  // ApostleNFT operator: mining (escrow)
+  tx = await (await ethers.getContractAt("ApostleNFT", dep.apostle)).setOperator(dep.mining, true); await tx.wait();
+
+  // Resource tokens minter: mining system
+  const resAddrs = [dep.gold, dep.wood, dep.water, dep.fire, dep.soil];
+  const resNames = ["GoldToken","WoodToken","WaterToken","FireToken","SoilToken"];
+  for (let i=0; i<5; i++) {
+    tx = await (await ethers.getContractAt(resNames[i], resAddrs[i])).setMinter(dep.mining, true);
     await tx.wait();
   }
-  tx = await kton.setOperator(deployed.bank, true, { nonce: nonce++ });
-  await tx.wait();
-  console.log("All operators configured.");
+  console.log("  All permissions set.");
 
-  // Initialize Lands (batches of 50 to stay within gas limit)
-  console.log("\n--- Initializing 10000 lands ---");
-  const { xs, ys, rates, masks } = generateLandData();
+  // ── Init 10000 Lands ──────────────────────────────────────────
+  console.log("\n[10] Minting 10000 lands (200 batches x 50)...");
+  const {xs, ys, attrs} = landData();
   const BATCH = 50;
-  nonce = await ethers.provider.getTransactionCount(deployer.address, "latest");
-  for (let i = 0; i < 10000; i += BATCH) {
-    const bxs    = xs.slice(i, i + BATCH);
-    const bys    = ys.slice(i, i + BATCH);
-    const brates = rates.slice(i, i + BATCH);
-    const bmasks = masks.slice(i, i + BATCH);
-    tx = await landBase.batchAssignLands(bxs, bys, deployer.address, brates, bmasks, { gasLimit: 8000000, nonce: nonce++ });
+  for (let i=0; i<10000; i+=BATCH) {
+    tx = await (await ethers.getContractAt("LandInitializer", dep.initializer)).batchMint(
+      xs.slice(i, i+BATCH),
+      ys.slice(i, i+BATCH),
+      attrs.slice(i, i+BATCH),
+      deployer.address,
+      { gasLimit: 8_000_000 }
+    );
     await tx.wait();
-    if ((i / BATCH + 1) % 20 === 0) {
-      console.log(` ${i + BATCH} / 10000 lands initialized`);
-    }
+    if ((i/BATCH+1) % 40 === 0) console.log(`  ${i+BATCH}/10000`);
   }
-  console.log("All 10000 lands initialized!");
+  console.log("  10000 lands minted!");
 
-  // Genesis Auctions
-  console.log("\n--- Creating 20 genesis auctions ---");
-  const startPrice = ethers.parseEther("10");
-  const endPrice   = ethers.parseEther("1");
-  const duration   = 7 * 24 * 3600;
-  nonce = await ethers.provider.getTransactionCount(deployer.address, "latest");
-  tx = await objectOwnership.setApprovalForAll(deployed.clockAuction, true, { nonce: nonce++ });
-  await tx.wait();
-  for (let i = 0; i < 20; i++) {
-    const x = i % 10, y = Math.floor(i / 10);
-    const tokenId = x * 10000 + y + 1;
+  // ── Genesis Auctions (first 20 lands) ─────────────────────────
+  console.log("\n[11] Creating 20 genesis auctions...");
+  // Approve auction to take land from deployer (initializer is operator so it can transfer)
+  const landContract = await ethers.getContractAt("LandNFT", dep.land);
+  tx = await landContract.setApprovalForAll(dep.auction, true); await tx.wait();
+
+  const startP = ethers.parseEther("10");
+  const endP   = ethers.parseEther("1");
+  const dur    = 7 * 24 * 3600;
+  for (let i=0; i<20; i++) {
+    const tid = i+1; // tokenIds 1-20
     try {
-      tx = await clockAuction.createAuction(tokenId, startPrice, endPrice, duration, { nonce: nonce++ });
+      tx = await (await ethers.getContractAt("LandAuction", dep.auction)).createAuction(
+        tid, startP, endP, dur
+      );
       await tx.wait();
-    } catch (e) {
-      console.log(` tokenId ${tokenId} auction failed: ${e.message.slice(0, 80)}`);
-      // re-sync nonce on error
-      nonce = await ethers.provider.getTransactionCount(deployer.address, "latest");
-    }
+    } catch(e) { console.log(`  skip ${tid}:`, e.message.slice(0,60)); }
   }
-  console.log("Genesis auctions created!");
+  console.log("  Genesis auctions created!");
 
-  // Save
-  const output = {
-    network: "bscTestnet",
-    chainId: 97,
+  // ── Save ──────────────────────────────────────────────────────
+  const out = {
+    network: "bscTestnet", chainId: 97,
     deployedAt: new Date().toISOString(),
     deployer: deployer.address,
-    contracts: deployed
+    contracts: dep
   };
-  fs.writeFileSync("deployed.json", JSON.stringify(output, null, 2));
+  fs.writeFileSync("deployed.json", JSON.stringify(out, null, 2));
   console.log("\n✅ DEPLOYMENT COMPLETE");
-  console.log(JSON.stringify(deployed, null, 2));
+  console.log(JSON.stringify(dep, null, 2));
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch(e => { console.error(e); process.exit(1); });

@@ -1,7 +1,7 @@
 {
   "name": "evo-land-bsc",
-  "version": "1.0.0",
-  "description": "Evolution Land BSC contracts",
+  "version": "2.0.0",
+  "description": "Evolution Land BSC - Simplified Single Chain",
   "scripts": {
     "compile": "hardhat compile",
     "deploy": "hardhat run scripts/deploy.js --network bscTestnet",
