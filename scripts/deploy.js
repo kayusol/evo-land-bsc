@@ -145,44 +145,7 @@ async function main() {
 
   console.log("  All permissions configured.");
 
-  // ── 5. Mint 10000 Lands ───────────────────────────────────────
-  console.log("\n[12/12] Minting 10000 lands (200 batches x 50)...");
-  const initC = await ethers.getContractAt("LandInitializer", dep.initializer);
-  const { xs, ys, attrs } = landData();
-  const BATCH = 50;
-  for (let i = 0; i < 10000; i += BATCH) {
-    tx = await initC.batchMint(
-      xs.slice(i, i + BATCH),
-      ys.slice(i, i + BATCH),
-      attrs.slice(i, i + BATCH),
-      deployer.address,
-      { gasLimit: 8_000_000 }
-    );
-    await tx.wait();
-    if (Math.floor(i / BATCH) % 40 === 39)
-      console.log(`  ${i + BATCH}/10000 minted`);
-  }
-  console.log("  10000 lands minted!");
-
-  // ── 6. Genesis Auctions (first 20 lands) ─────────────────────
-  console.log("\nCreating 20 genesis auctions (tokenId 1-20)...");
-  const auctionC = await ethers.getContractAt("LandAuction", dep.auction);
-  const landApproved = await landC.setApprovalForAll(dep.auction, true);
-  await landApproved.wait();
-
-  const startP = ethers.parseEther("10");  // 10 RING start
-  const endP   = ethers.parseEther("1");   // 1  RING floor
-  const dur    = 7 * 24 * 3600;            // 7 days
-  for (let i = 0; i < 20; i++) {
-    try {
-      tx = await auctionC.createAuction(i + 1, startP, endP, dur, { gasLimit: 200_000 });
-      await tx.wait();
-    } catch (e) {
-      console.log(`  skip ${i + 1}:`, e.message.slice(0, 80));
-    }
-  }
-  console.log("  20 genesis auctions live!");
-
+    // ── 5 & 6. SKIPPED: Mint lands + Genesis Auctions (uncomment to run) ──────
   // ── 7. Save results ──────────────────────────────────────────
   const output = {
     network:    "bscTestnet",
