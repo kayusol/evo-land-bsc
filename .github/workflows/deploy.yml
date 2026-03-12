@@ -12,39 +12,36 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     if: github.event.inputs.confirm == 'DEPLOY'
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies
-        run: npm install 2>&1
+        run: npm ci
 
-      - name: Show installed packages
-        run: |
-          echo "=== Hardhat version ==="
-          npx hardhat --version
-          echo "=== OZ version ==="
-          cat node_modules/@openzeppelin/contracts/package.json | grep '"version"' || true
+      - name: Compile contracts
+        run: npx hardhat compile --force
 
-      - name: Compile contracts (verbose)
-        run: |
-          npx hardhat compile --force 2>&1
-          echo "Compile exit code: $?"
-
-      - name: Deploy to BSC Testnet
+      - name: Deploy all 12 contracts
         env:
           PRIVATE_KEY: ${{ secrets.DEPLOYER_PRIVATE_KEY }}
         run: |
           npx hardhat run scripts/deploy.js --network bscTestnet 2>&1 | tee deploy-output.log
-          DEPLOY_EXIT=${PIPESTATUS[0]}
-          echo "Deploy exit code: $DEPLOY_EXIT"
-          exit $DEPLOY_EXIT
+          exit ${PIPESTATUS[0]}
+
+      - name: Print deployed.json
+        if: always()
+        run: |
+          echo "=== deployed.json ==="
+          cat deployed.json 2>/dev/null || echo "(not found)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -54,12 +51,4 @@ jobs:
           path: |
             deployed.json
             deploy-output.log
-
-      - name: Print results
-        if: always()
-        run: |
-          echo "=== deployed.json ==="
-          cat deployed.json 2>/dev/null || echo "(not found)"
-          echo ""
-          echo "=== deploy log (last 100 lines) ==="
-          tail -100 deploy-output.log 2>/dev/null || true
+          retention-days: 30
