@@ -3,11 +3,7 @@ pragma solidity ^0.8.20;
 
 // =============================================================
 //  Evolution Land BSC  —  Simplified Single-Chain Edition
-//
-//  Tokens:   RING (main) + GOLD / WOOD / HHO / FIRE / SIOO
-//  NFTs:     Land (100x100) + Drill + Apostle
-//  Systems:  Mining (Apostle works on Land, Drill boosts rate)
-//            Dutch Auction (Land primary sale)
+//  v2: ApostleNFT 升级 — 基因/成长/繁殖系统完整实现
 // =============================================================
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -118,15 +114,10 @@ contract SoilToken  is MintableERC20 { constructor() MintableERC20("EvoLand Soil
 
 /**
  * @notice LandNFT — 10,000 parcels (x 0-99, y 0-99)
- *   tokenId = x * 100 + y + 1  (1-based, range 1-10000)
- *   resourceAttr: packed uint80  [gold:16][wood:16][water:16][fire:16][soil:16]
- *     each field is the land's base mining rate (1-1000 units/day per apostle)
  */
 contract LandNFT is ERC721Base {
     mapping(address => bool) public operators;
-    // resourceAttr packed: bits 0-15=gold, 16-31=wood, 32-47=water, 48-63=fire, 64-79=soil
     mapping(uint256 => uint80) public resourceAttr;
-    // district tag (future use, default 1)
     mapping(uint256 => uint8)  public district;
 
     event LandMinted(uint256 indexed tokenId, int16 x, int16 y, uint80 attr);
@@ -153,7 +144,6 @@ contract LandNFT is ERC721Base {
         emit LandMinted(id, x, y, attr);
     }
 
-    // Operator can transfer without per-token approval (auction contract)
     function transferFrom(address f, address t, uint256 id) public override {
         if (operators[msg.sender]) _xfer(f,t,id);
         else super.transferFrom(f,t,id);
@@ -163,22 +153,19 @@ contract LandNFT is ERC721Base {
         else super.safeTransferFrom(f,t,id,d);
     }
 
-    // Decode rate for a single resource (0=gold,1=wood,2=water,3=fire,4=soil)
     function getRate(uint256 id, uint8 res) public view returns (uint16) {
         return uint16(resourceAttr[id] >> (uint256(res)*16));
     }
 }
 
 /**
- * @notice DrillNFT — equipment NFT that boosts mining rate when equipped on land
- *   tier 1-5:  boost multiplier = tier * 20%  (tier5 = 2x)
- *   resource affinity: which resource it boosts (0-4)
+ * @notice DrillNFT — equipment NFT
  */
 contract DrillNFT is ERC721Base {
     uint256 public nextId = 1;
     mapping(address => bool) public operators;
 
-    struct DrillAttr { uint8 tier; uint8 affinity; } // affinity: 0=gold,1=wood,2=water,3=fire,4=soil
+    struct DrillAttr { uint8 tier; uint8 affinity; }
     mapping(uint256 => DrillAttr) public attrs;
 
     event DrillMinted(uint256 indexed id, address to, uint8 tier, uint8 affinity);
@@ -208,31 +195,209 @@ contract DrillNFT is ERC721Base {
 }
 
 /**
- * @notice ApostleNFT — worker NFT sent to mine on lands
- *   strength 1-100: affects mining output
- *   Apostles are minted by the game owner (or via a future breeding system)
+ * @notice ApostleNFT v2 — 完整基因/成长/繁殖系统
+ *
+ *  基因（genes, uint256）编码方式兼容 Evolution Land 原版：
+ *    bit 241      = gender  (0=female, 1=male)
+ *    bits 242-243 = race    (0=human)
+ *    其余位       = 外貌/才能随机特征
+ *
+ *  成长：mint 后 GROW_PERIOD (7天) 内为幼体，之后自动成年
+ *  繁殖：雄+雌，双方均已成年，冷却期结束后可繁殖，消耗 RING
+ *  tokenURI：返回 https://api.evolution.land/apostle/{genes}.png
  */
 contract ApostleNFT is ERC721Base {
+    uint256 public constant GROW_PERIOD    = 7 days;
+    uint256 public constant BASE_COOLDOWN  = 1 days;  // 第0代冷却
     uint256 public nextId = 1;
+
     mapping(address => bool) public operators;
 
-    struct ApostleAttr { uint8 strength; uint8 element; } // element: 0-4 affinity
+    // ── 核心属性 ─────────────────────────────────────────────
+    struct ApostleAttr {
+        uint8   strength;   // 1-100 挖矿力
+        uint8   element;    // 0-4   元素亲和
+        uint8   gender;     // 0=female 1=male
+        uint16  gen;        // 代数 0=创世
+        uint256 genes;      // 256位基因，与原版兼容
+        uint64  birthTime;  // mint 时间戳
+        uint64  cooldownEnd;// 繁殖冷却结束时间
+        uint32  motherId;   // 0=无
+        uint32  fatherId;   // 0=无
+    }
     mapping(uint256 => ApostleAttr) public attrs;
 
-    event ApostleMinted(uint256 indexed id, address to, uint8 strength, uint8 element);
+    // ── 繁殖费 ───────────────────────────────────────────────
+    address public ring;            // RING token
+    uint256 public breedFee = 1e18; // 1 RING per breed
+
+    // ── Events ───────────────────────────────────────────────
+    event ApostleMinted(uint256 indexed id, address to, uint8 strength, uint8 element, uint8 gender, uint256 genes);
+    event ApostleBorn(uint256 indexed id, address to, uint32 motherId, uint32 fatherId, uint256 genes);
 
     modifier onlyOperator() { require(operators[msg.sender]||msg.sender==owner,"!op"); _; }
 
-    constructor() ERC721Base("EvoLand Apostle", "APO") {}
+    constructor(address _ring) ERC721Base("EvoLand Apostle", "APO") {
+        ring = _ring;
+    }
 
     function setOperator(address a, bool v) external onlyOwner { operators[a]=v; }
+    function setBreedFee(uint256 f) external onlyOwner { breedFee = f; }
+    function setRing(address r) external onlyOwner { ring = r; }
 
-    function mint(address to, uint8 strength, uint8 element) external onlyOperator returns (uint256 id) {
+    // ── Mint (由 BlindBox 或 owner 调用) ────────────────────
+    /// @param to        接收者
+    /// @param strength  力量 1-100
+    /// @param element   元素 0-4
+    /// @param genes     256位基因（BlindBox 随机生成）
+    function mint(address to, uint8 strength, uint8 element, uint256 genes)
+        external onlyOperator returns (uint256 id)
+    {
         require(strength>=1&&strength<=100&&element<=4,"bad attr");
+        uint8 gender = uint8((genes >> 241) & 1); // 从基因提取性别
         id = nextId++;
-        attrs[id] = ApostleAttr(strength, element);
+        attrs[id] = ApostleAttr({
+            strength:    strength,
+            element:     element,
+            gender:      gender,
+            gen:         0,
+            genes:       genes,
+            birthTime:   uint64(block.timestamp),
+            cooldownEnd: 0,
+            motherId:    0,
+            fatherId:    0
+        });
         _mint(to, id);
-        emit ApostleMinted(id, to, strength, element);
+        emit ApostleMinted(id, to, strength, element, gender, genes);
+    }
+
+    // ── 成年判断 ─────────────────────────────────────────────
+    function isAdult(uint256 id) public view returns (bool) {
+        return block.timestamp >= uint256(attrs[id].birthTime) + GROW_PERIOD;
+    }
+
+    /// @return 0-100 的成长进度百分比
+    function growthProgress(uint256 id) public view returns (uint8) {
+        uint256 born = attrs[id].birthTime;
+        if (born == 0) return 0;
+        uint256 elapsed = block.timestamp - born;
+        if (elapsed >= GROW_PERIOD) return 100;
+        return uint8(elapsed * 100 / GROW_PERIOD);
+    }
+
+    // ── tokenURI — 返回原版 Evolution Land 使徒图片 ─────────
+    function tokenURI(uint256 id) external view returns (string memory) {
+        require(ownerOf[id] != address(0), "!exist");
+        uint256 genes = attrs[id].genes;
+        // 与原版完全一致: https://api.evolution.land/apostle/{genesU256}.png
+        return string(abi.encodePacked(
+            "https://api.evolution.land/apostle/",
+            _toString(genes),
+            ".png"
+        ));
+    }
+
+    // ── 繁殖 ─────────────────────────────────────────────────
+    /// @param maleId   雄性使徒 ID
+    /// @param femaleId 雌性使徒 ID
+    /// @return childId 新生使徒 ID
+    function breed(uint256 maleId, uint256 femaleId) external returns (uint256 childId) {
+        ApostleAttr storage m = attrs[maleId];
+        ApostleAttr storage f = attrs[femaleId];
+
+        require(ownerOf[maleId]   == msg.sender, "!male owner");
+        require(ownerOf[femaleId] == msg.sender, "!female owner");
+        require(m.gender == 1, "!male");
+        require(f.gender == 0, "!female");
+        require(isAdult(maleId),   "male not adult");
+        require(isAdult(femaleId), "female not adult");
+        require(block.timestamp >= m.cooldownEnd, "male cooling");
+        require(block.timestamp >= f.cooldownEnd, "female cooling");
+
+        // 收取繁殖费
+        if (breedFee > 0 && ring != address(0)) {
+            require(
+                MintableERC20(ring).transferFrom(msg.sender, owner, breedFee),
+                "breed fee failed"
+            );
+        }
+
+        // 生成后代基因（混合双亲基因 + 随机变异）
+        uint256 seed = uint256(keccak256(abi.encodePacked(
+            block.prevrandao, block.timestamp, msg.sender, maleId, femaleId, nextId
+        )));
+        uint256 childGenes = _mixGenes(m.genes, f.genes, seed);
+        uint8 childGender  = uint8((childGenes >> 241) & 1);
+
+        // 后代力量：双亲均值 ± 随机浮动
+        uint8 childStrength;
+        {
+            uint256 avg = (uint256(m.strength) + uint256(f.strength)) / 2;
+            int256 delta = int256(seed & 0x1f) - 16; // -16 ~ +15
+            int256 s = int256(avg) + delta;
+            if (s < 1) s = 1;
+            if (s > 100) s = 100;
+            childStrength = uint8(uint256(s));
+        }
+
+        // 后代元素：随机取父或母
+        uint8 childElem = ((seed >> 8) & 1) == 0 ? m.element : f.element;
+
+        // 后代代数
+        uint16 childGen = m.gen > f.gen ? m.gen + 1 : f.gen + 1;
+
+        // 更新冷却
+        uint256 cd = BASE_COOLDOWN * (1 << uint256(m.gen));
+        if (cd > 30 days) cd = 30 days;
+        m.cooldownEnd = uint64(block.timestamp + cd);
+
+        cd = BASE_COOLDOWN * (1 << uint256(f.gen));
+        if (cd > 30 days) cd = 30 days;
+        f.cooldownEnd = uint64(block.timestamp + cd);
+
+        // 铸造后代
+        childId = nextId++;
+        attrs[childId] = ApostleAttr({
+            strength:    childStrength,
+            element:     childElem,
+            gender:      childGender,
+            gen:         childGen,
+            genes:       childGenes,
+            birthTime:   uint64(block.timestamp),
+            cooldownEnd: 0,
+            motherId:    uint32(femaleId),
+            fatherId:    uint32(maleId)
+        });
+        _mint(msg.sender, childId);
+        emit ApostleBorn(childId, msg.sender, uint32(femaleId), uint32(maleId), childGenes);
+    }
+
+    // ── 基因混合算法（兼容原版逻辑简化版）───────────────────
+    function _mixGenes(uint256 a, uint256 b, uint256 seed) internal pure returns (uint256 child) {
+        // 按 256 bit 分 8 段，每段随机选父或母，末位随机变异
+        for (uint8 i = 0; i < 8; i++) {
+            uint256 mask = type(uint256).max >> (256 - 32) << (i * 32);
+            bool useFather = (seed >> i) & 1 == 1;
+            uint256 segment = useFather ? (a & mask) : (b & mask);
+            // 1% 概率对该段随机变异
+            if ((seed >> (i + 8)) % 100 == 0) {
+                segment = (seed << (i * 32)) & mask;
+            }
+            child |= segment;
+        }
+        // gender bit (241) 随机
+        if ((seed >> 20) & 1 == 1) child |= (uint256(1) << 241);
+        else child &= ~(uint256(1) << 241);
+    }
+
+    // ── 工具 ─────────────────────────────────────────────────
+    function _toString(uint256 v) internal pure returns (string memory) {
+        if (v == 0) return "0";
+        uint256 tmp = v; uint256 len;
+        while (tmp != 0) { len++; tmp /= 10; }
+        bytes memory buf = new bytes(len);
+        while (v != 0) { buf[--len] = bytes1(uint8(48 + v % 10)); v /= 10; }
+        return string(buf);
     }
 
     function transferFrom(address f, address t, uint256 id) public override {
@@ -247,47 +412,27 @@ contract ApostleNFT is ERC721Base {
 
 // ── Mining System ─────────────────────────────────────────────
 
-/**
- * @notice MiningSystem — core gameplay loop
- *
- *   Flow:
- *     1. Land owner calls startMining(landId, apostleId, drillId)  [drillId=0 = no drill]
- *     2. Resources accrue per second based on land rates + apostle strength + drill boost
- *     3. Anyone calls claim(landId) to mint accrued resources to land owner
- *     4. Land owner calls stopMining(landId, apostleId) to retrieve apostle
- *
- *   Formula (per second, per apostle slot):
- *     output = landRate * apostleStrength/50 * drillMultiplier / 86400
- *     drillMultiplier = 1.0 + tier*0.2  if drill affinity matches resource, else 1.0
- *
- *   Multiple apostles can work the same land (up to MAX_APOSTLES_PER_LAND = 5)
- */
 contract MiningSystem is Ownable {
     uint256 public constant MAX_APOSTLES_PER_LAND = 5;
-    uint256 public constant PRECISION = 1e12; // avoid truncation
+    uint256 public constant PRECISION = 1e12;
 
     LandNFT    public land;
     DrillNFT   public drill;
     ApostleNFT public apostle;
 
-    address[5] public resources; // [gold, wood, water, fire, soil]
+    address[5] public resources;
 
     struct Slot {
         uint256 apostleId;
-        uint256 drillId;    // 0 = no drill
+        uint256 drillId;
         uint256 startTime;
     }
-    // landId => list of active slots
     mapping(uint256 => Slot[MAX_APOSTLES_PER_LAND]) public slots;
     mapping(uint256 => uint256) public slotCount;
-
-    // Track which apostle / drill is locked
-    mapping(uint256 => uint256) public apostleOnLand; // apostleId => landId (0=free)
-    mapping(uint256 => uint256) public drillOnLand;   // drillId   => landId (0=free)
-
-    // Unclaimed balance per resource per land (accumulated before claim)
+    mapping(uint256 => uint256) public apostleOnLand;
+    mapping(uint256 => uint256) public drillOnLand;
     mapping(uint256 => uint256[5]) public pending;
-    uint256 public lastUpdate; // timestamp of last global flush (unused — per-slot tracking)
+    uint256 public lastUpdate;
 
     event MiningStarted(uint256 indexed landId, uint256 apostleId, uint256 drillId);
     event MiningStopped(uint256 indexed landId, uint256 apostleId);
@@ -303,10 +448,10 @@ contract MiningSystem is Ownable {
         resources = _resources;
     }
 
-    // ── Start Mining ─────────────────────────────────────────
     function startMining(uint256 landId, uint256 apostleId, uint256 drillId) external {
         require(land.ownerOf(landId) == msg.sender, "!land owner");
         require(apostle.ownerOf(apostleId) == msg.sender, "!apostle owner");
+        require(apostle.isAdult(apostleId), "apostle not adult");
         require(apostleOnLand[apostleId] == 0, "apostle busy");
         uint256 count = slotCount[landId];
         require(count < MAX_APOSTLES_PER_LAND, "land full");
@@ -314,11 +459,9 @@ contract MiningSystem is Ownable {
         if (drillId != 0) {
             require(drill.ownerOf(drillId) == msg.sender, "!drill owner");
             require(drillOnLand[drillId] == 0, "drill busy");
-            // Transfer drill to this contract as escrow
             drill.transferFrom(msg.sender, address(this), drillId);
             drillOnLand[drillId] = landId;
         }
-        // Transfer apostle to this contract as escrow
         apostle.transferFrom(msg.sender, address(this), apostleId);
         apostleOnLand[apostleId] = landId;
 
@@ -328,7 +471,6 @@ contract MiningSystem is Ownable {
         emit MiningStarted(landId, apostleId, drillId);
     }
 
-    // ── Stop Mining ──────────────────────────────────────────
     function stopMining(uint256 landId, uint256 apostleId) external {
         require(land.ownerOf(landId) == msg.sender, "!land owner");
         _flushLand(landId);
@@ -338,14 +480,12 @@ contract MiningSystem is Ownable {
         for (uint256 i = 0; i < count; i++) {
             if (slots[landId][i].apostleId == apostleId) {
                 uint256 drillId = slots[landId][i].drillId;
-                // Return NFTs
                 apostle.transferFrom(address(this), msg.sender, apostleId);
                 apostleOnLand[apostleId] = 0;
                 if (drillId != 0) {
                     drill.transferFrom(address(this), msg.sender, drillId);
                     drillOnLand[drillId] = 0;
                 }
-                // Compact slot array
                 slots[landId][i] = slots[landId][count-1];
                 delete slots[landId][count-1];
                 slotCount[landId] = count - 1;
@@ -357,23 +497,21 @@ contract MiningSystem is Ownable {
         emit MiningStopped(landId, apostleId);
     }
 
-    // ── Claim ────────────────────────────────────────────────
     function claim(uint256 landId) external {
         _flushLand(landId);
-        address owner = land.ownerOf(landId);
+        address landOwner = land.ownerOf(landId);
         uint256[5] memory amounts;
         for (uint8 r = 0; r < 5; r++) {
             uint256 amt = pending[landId][r];
             if (amt > 0) {
                 pending[landId][r] = 0;
                 amounts[r] = amt;
-                MintableERC20(resources[r]).mint(owner, amt);
+                MintableERC20(resources[r]).mint(landOwner, amt);
             }
         }
-        emit Claimed(landId, owner, amounts);
+        emit Claimed(landId, landOwner, amounts);
     }
 
-    // ── View: how much is available to claim ─────────────────
     function pendingRewards(uint256 landId) external view returns (uint256[5] memory res) {
         for (uint8 r = 0; r < 5; r++) res[r] = pending[landId][r];
         uint256 count = slotCount[landId];
@@ -385,7 +523,6 @@ contract MiningSystem is Ownable {
         }
     }
 
-    // ── Internal ─────────────────────────────────────────────
     function _flushLand(uint256 landId) internal {
         uint256 count = slotCount[landId];
         for (uint256 i = 0; i < count; i++) {
@@ -394,56 +531,51 @@ contract MiningSystem is Ownable {
             if (elapsed == 0) continue;
             uint256[5] memory inc = _calcIncrement(landId, s, elapsed);
             for (uint8 r = 0; r < 5; r++) pending[landId][r] += inc[r];
-            s.startTime = block.timestamp; // reset timer
+            s.startTime = block.timestamp;
         }
     }
 
     function _calcIncrement(uint256 landId, Slot storage s, uint256 elapsed)
         internal view returns (uint256[5] memory inc)
     {
-        ApostleNFT.ApostleAttr memory aa = _getApostleAttr(s.apostleId);
+        (uint8 strength, , , , , , , ,) = _getApostleAttrs(s.apostleId);
         DrillNFT.DrillAttr memory da;
         bool hasDrill = s.drillId != 0;
-        if (hasDrill) da = _getDrillAttr(s.drillId);
+        if (hasDrill) { (uint8 t, uint8 a) = drill.attrs(s.drillId); da = DrillNFT.DrillAttr(t, a); }
 
         for (uint8 r = 0; r < 5; r++) {
-            uint256 rate = land.getRate(landId, r); // base rate (units/day)
+            uint256 rate = land.getRate(landId, r);
             if (rate == 0) continue;
-            // apostle strength factor:  strength/50  (strength=50 → 1x)
-            uint256 strength = aa.strength; // 1-100
-            // drill boost: +tier*20% if affinity matches
-            uint256 boost = 100; // 100% base
+            uint256 boost = 100;
             if (hasDrill && da.affinity == r) boost += uint256(da.tier) * 20;
-            // output = rate * strength * boost * elapsed / (50 * 100 * 86400)
-            inc[r] = rate * 1e18 * strength * boost * elapsed / (50 * 100 * 86400 * PRECISION);
+            inc[r] = rate * 1e18 * uint256(strength) * boost * elapsed / (50 * 100 * 86400 * PRECISION);
         }
     }
 
-    // Work around stack-too-deep for struct reads
-    function _getApostleAttr(uint256 id) internal view returns (ApostleNFT.ApostleAttr memory) {
-        (uint8 s, uint8 e) = apostle.attrs(id);
-        return ApostleNFT.ApostleAttr(s, e);
-    }
-    function _getDrillAttr(uint256 id) internal view returns (DrillNFT.DrillAttr memory) {
-        (uint8 t, uint8 a) = drill.attrs(id);
-        return DrillNFT.DrillAttr(t, a);
+    function _getApostleAttrs(uint256 id) internal view returns (
+        uint8 strength, uint8 element, uint8 gender, uint16 gen,
+        uint256 genes, uint64 birthTime, uint64 cooldownEnd,
+        uint32 motherId, uint32 fatherId
+    ) {
+        ApostleNFT.ApostleAttr memory a = _readAttr(id);
+        return (a.strength, a.element, a.gender, a.gen, a.genes, a.birthTime, a.cooldownEnd, a.motherId, a.fatherId);
     }
 
-    // ERC721 receiver (to hold escrowed apostles/drills)
+    function _readAttr(uint256 id) internal view returns (ApostleNFT.ApostleAttr memory) {
+        (uint8 s, uint8 e, uint8 g, uint16 gen, uint256 genes, uint64 bt, uint64 cd, uint32 mid, uint32 fid)
+            = apostle.attrs(id);
+        return ApostleNFT.ApostleAttr(s, e, g, gen, genes, bt, cd, mid, fid);
+    }
+
     function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
         return 0x150b7a02;
     }
 }
 
-// ── Dutch Auction (Land primary sale) ────────────────────────
+// ── Dutch Auction ─────────────────────────────────────────────
 
-/**
- * @notice LandAuction — Dutch auction for land parcels
- *   Seller lists a land, price linearly drops from startPrice to endPrice over duration.
- *   Buyer pays RING. 4% fee kept by contract owner.
- */
 contract LandAuction is Ownable {
-    uint256 public constant FEE_BPS = 400;   // 4%
+    uint256 public constant FEE_BPS = 400;
     uint256 public constant BPS     = 10000;
 
     LandNFT  public land;
@@ -485,7 +617,6 @@ contract LandAuction is Ownable {
         ERC20Base r = ERC20Base(ring);
         require(r.transferFrom(msg.sender, a.seller, price-fee),"ring fail");
         if (fee>0) r.transferFrom(msg.sender, owner, fee);
-        address seller = a.seller;
         delete auctions[id];
         land.transferFrom(address(this), msg.sender, id);
         emit AuctionWon(id, msg.sender, price);
@@ -515,17 +646,12 @@ contract LandAuction is Ownable {
     }
 }
 
-// ── LandInitializer (batch-mint 10000 lands) ──────────────────
+// ── LandInitializer ───────────────────────────────────────────
 
-/**
- * @notice LandInitializer — owner utility to batch-mint lands and start genesis auctions.
- *         Can be called after deployment, then ownership can be revoked.
- */
 contract LandInitializer is Ownable {
     LandNFT     public land;
     LandAuction public auction;
     address     public ring;
-    bool        public initialized;
 
     constructor(address _land, address _auction, address _ring) {
         land=LandNFT(_land); auction=LandAuction(_auction); ring=_ring;
@@ -534,11 +660,11 @@ contract LandInitializer is Ownable {
     function batchMint(
         int16[] calldata xs,
         int16[] calldata ys,
-        uint80[] calldata attrs,
+        uint80[] calldata attrs_,
         address to
     ) external onlyOwner {
         for (uint256 i=0; i<xs.length; i++) {
-            land.mint(to, xs[i], ys[i], attrs[i]);
+            land.mint(to, xs[i], ys[i], attrs_[i]);
         }
     }
 
@@ -548,8 +674,6 @@ contract LandInitializer is Ownable {
         uint128 endPrice,
         uint64  duration
     ) external onlyOwner {
-        // approve auction contract to transfer
-        // (deployer must have called land.setOperator(initializer, true))
         for (uint256 i=0; i<ids.length; i++) {
             try auction.createAuction(ids[i], startPrice, endPrice, duration) {}
             catch {}
