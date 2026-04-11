@@ -1,7 +1,6 @@
 const { ethers } = require("hardhat");
 const fs = require("fs");
 
-// Resource rate encoding: 5x uint16 packed into uint80
 function encodeAttr(g, w, wa, f, s) {
   return (
     BigInt(g) |
@@ -12,7 +11,6 @@ function encodeAttr(g, w, wa, f, s) {
   ).toString();
 }
 
-// Generate deterministic attributes for all 10000 lands
 function landData() {
   const xs = [], ys = [], attrs = [];
   for (let x = 0; x <= 99; x++) {
@@ -74,8 +72,9 @@ async function main() {
   const { address: drillAddr } = await deploy("DrillNFT");
   dep.drill = drillAddr;
 
-  console.log("[5/12] ApostleNFT...");
-  const { address: apoAddr } = await deploy("ApostleNFT");
+  // ApostleNFT v2 需要传入 RING 地址
+  console.log("[5/12] ApostleNFT v2...");
+  const { address: apoAddr } = await deploy("ApostleNFT", dep.ring);
   dep.apostle = apoAddr;
 
   // ── 3. Systems ───────────────────────────────────────────────
@@ -99,13 +98,13 @@ async function main() {
   const { address: refAddr } = await deploy("ReferralReward");
   dep.referral = refAddr;
 
-  console.log("[10/12] BlindBox...");
-  const apostleBoxPrice = ethers.parseEther("1");   // 1 RING per apostle box
-  const drillBoxPrice   = ethers.parseEther("0.5"); // 0.5 RING per drill box
+  console.log("[10/12] BlindBox v2...");
+  const apostleBoxPrice = ethers.parseEther("1");
+  const drillBoxPrice   = ethers.parseEther("0.5");
   const { address: bbAddr } = await deploy(
     "BlindBox",
     dep.ring, dep.apostle, dep.drill,
-    deployer.address,   // treasury = deployer for now
+    deployer.address,
     apostleBoxPrice,
     drillBoxPrice
   );
@@ -115,23 +114,20 @@ async function main() {
   console.log("\n[11/12] Setting permissions...");
   let tx;
 
-  const landC    = await ethers.getContractAt("LandNFT",    dep.land);
-  const drillC   = await ethers.getContractAt("DrillNFT",   dep.drill);
-  const apoC     = await ethers.getContractAt("ApostleNFT", dep.apostle);
-  const refC     = await ethers.getContractAt("ReferralReward", dep.referral);
+  const landC  = await ethers.getContractAt("LandNFT",    dep.land);
+  const drillC = await ethers.getContractAt("DrillNFT",   dep.drill);
+  const apoC   = await ethers.getContractAt("ApostleNFT", dep.apostle);
+  const refC   = await ethers.getContractAt("ReferralReward", dep.referral);
 
-  // Land operators: initializer + auction + mining
   tx = await landC.setOperator(dep.initializer, true); await tx.wait();
   tx = await landC.setOperator(dep.auction,     true); await tx.wait();
   tx = await landC.setOperator(dep.mining,      true); await tx.wait();
 
-  // Drill & Apostle operators: mining (escrow) + blindbox (mint)
   tx = await drillC.setOperator(dep.mining,   true); await tx.wait();
   tx = await drillC.setOperator(dep.blindbox, true); await tx.wait();
   tx = await apoC.setOperator(dep.mining,     true); await tx.wait();
   tx = await apoC.setOperator(dep.blindbox,   true); await tx.wait();
 
-  // Resource token minters: mining system
   for (const [cname, key] of [
     ["GoldToken","gold"],["WoodToken","wood"],["WaterToken","water"],
     ["FireToken","fire"],["SoilToken","soil"]
@@ -140,13 +136,10 @@ async function main() {
     tx = await t.setMinter(dep.mining, true); await tx.wait();
   }
 
-  // ReferralReward: set miningSystem
   tx = await refC.setMiningSystem(dep.mining); await tx.wait();
-
   console.log("  All permissions configured.");
 
-    // ── 5 & 6. SKIPPED: Mint lands + Genesis Auctions (uncomment to run) ──────
-  // ── 7. Save results ──────────────────────────────────────────
+  // ── 5. Save results ──────────────────────────────────────────
   const output = {
     network:    "bscTestnet",
     chainId:    97,
